@@ -18,3 +18,11 @@ __pycache__/
 # --- OS ---
 .DS_Store
 Thumbs.db
+
+# --- System / VSCode / OneDrive noise ---
+.bash_history
+*.xml
+*.log
+*.tmp
+*.lock
+*.cache
