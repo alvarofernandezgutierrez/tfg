@@ -1,0 +1,9 @@
+start_date: 2000-01-03 00:00:00
+end_date: 2026-01-13 00:00:00
+mean_daily_return: 0.00023916279379622475
+std_daily_return: 0.012208394809141604
+annualized_volatility_global: 0.19380225943368326
+annualized_volatility_mean_30d: 0.165232955151531
+max_drawdown: -0.5677538774277282
+best_year_simple_return: 2021
+worst_year_simple_return: 2008
