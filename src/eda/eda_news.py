@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-NEWS_PATH = Path("data/processed/news/fnspid_headlines_200k.csv")
+NEWS_PATH = Path("outputs/eda/rows_with_tickers.csv")
 OUT_DIR = Path("outputs/eda/news")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
