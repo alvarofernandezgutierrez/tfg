@@ -1,9 +1,10 @@
 import re
+import glob
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-NEWS_PATH = Path("outputs/eda/rows_with_tickers.csv")
+NEWS_DIR = Path("outputs/eda/ticker_quality_raw")  # carpeta con los parquets
 OUT_DIR = Path("outputs/eda/news")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -34,7 +35,22 @@ def top_words(series: pd.Series) -> pd.Series:
     return pd.Series(counts).sort_values(ascending=False).head(30)
 
 def main():
-    df = pd.read_csv(NEWS_PATH)
+    # ---- CARGA DESDE PARQUET ----
+    print("Cargando parquets...")
+    files = sorted(glob.glob(str(NEWS_DIR / "*.parquet")))
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    print(f"Filas cargadas: {len(df):,}")
+
+    # Normalizar nombres de columnas
+    col_mapping = {}
+    for col in df.columns:
+        c = col.lower()
+        if 'url' in c: col_mapping[col] = 'url'
+        elif 'symbol' in c or 'ticker' in c: col_mapping[col] = 'ticker'
+        elif 'title' in c: col_mapping[col] = 'title'
+        elif 'date' in c: col_mapping[col] = 'date'
+    df = df.rename(columns=col_mapping)
+
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date", "title", "url"])
     df["ticker"] = df["ticker"].astype(str).str.strip()
@@ -64,7 +80,7 @@ def main():
     # Noticias por año
     plt.figure()
     news_by_year.plot(kind="bar")
-    plt.title("Noticias por año (submuestra 200k)")
+    plt.title("Noticias por año")
     plt.xlabel("Año")
     plt.ylabel("Número de noticias")
     plt.tight_layout()
@@ -77,7 +93,7 @@ def main():
 
     plt.figure()
     news_by_month_series.plot()
-    plt.title("Noticias por mes (submuestra 200k)")
+    plt.title("Noticias por mes")
     plt.xlabel("Mes")
     plt.ylabel("Número de noticias")
     plt.tight_layout()
@@ -85,25 +101,21 @@ def main():
     plt.close()
 
     # Empresas grandes del SP500
-    # Conteo total por ticker
     ticker_counts = df["ticker"].value_counts(dropna=True)
-
-    big_stats = []
-    for t in BIG_TICKERS:
-        big_stats.append((t, int(ticker_counts.get(t, 0))))
+    big_stats = [(t, int(ticker_counts.get(t, 0))) for t in BIG_TICKERS]
     big_df = pd.DataFrame(big_stats, columns=["ticker", "news_count"]).sort_values("news_count", ascending=False)
     big_df.to_csv(OUT_DIR / "big_tickers_counts.csv", index=False)
 
     plt.figure()
     big_df.set_index("ticker")["news_count"].plot(kind="bar")
-    plt.title("Noticias en submuestra: empresas grandes (por ticker)")
+    plt.title("Noticias: empresas grandes S&P500 (por ticker)")
     plt.xlabel("Ticker")
     plt.ylabel("Número de noticias")
     plt.tight_layout()
     plt.savefig(OUT_DIR / "big_tickers_bar.png", dpi=200)
     plt.close()
 
-    # Distribución temporal para 2-3 tickers clave (elige los top de big_df)
+    # Distribución temporal top 3 tickers grandes
     top_big = big_df.sort_values("news_count", ascending=False).head(3)["ticker"].tolist()
     for t in top_big:
         tmp = df[df["ticker"] == t].copy()
@@ -122,23 +134,14 @@ def main():
         plt.savefig(OUT_DIR / f"news_by_month_{t}.png", dpi=200)
         plt.close()
 
-    # Sesgo por tipo de noticia
-    # Top palabras global
+    # Top palabras
     top_global = top_words(df["title"])
     top_global.to_csv(OUT_DIR / "top_words_global.csv", header=["count"])
 
-    # Comparación por periodos: primera mitad vs segunda mitad (por fecha)
     split_date = df["date"].median()
-    df_early = df[df["date"] <= split_date]
-    df_late = df[df["date"] > split_date]
+    top_words(df[df["date"] <= split_date]["title"]).to_csv(OUT_DIR / "top_words_early.csv", header=["count"])
+    top_words(df[df["date"] > split_date]["title"]).to_csv(OUT_DIR / "top_words_late.csv", header=["count"])
 
-    top_early = top_words(df_early["title"])
-    top_late = top_words(df_late["title"])
-
-    top_early.to_csv(OUT_DIR / "top_words_early.csv", header=["count"])
-    top_late.to_csv(OUT_DIR / "top_words_late.csv", header=["count"])
-
-    # Opcional: gráfico simple de top 15 global
     plt.figure()
     top_global.head(15).sort_values().plot(kind="barh")
     plt.title("Top 15 palabras (titulares) - global")
@@ -147,10 +150,8 @@ def main():
     plt.savefig(OUT_DIR / "top_words_global_top15.png", dpi=200)
     plt.close()
 
-    print("✅ Bloque 1 completado")
-    print("Outputs en:", OUT_DIR)
+    print("✅ Completado. Outputs en:", OUT_DIR)
     print("Resumen:", stats_path)
-    print("Gráficos: news_by_year.png, news_by_month.png, big_tickers_bar.png, etc.")
 
 if __name__ == "__main__":
     main()
