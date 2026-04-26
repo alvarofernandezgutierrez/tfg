@@ -3,14 +3,15 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Paths
-NEWS_PATH = Path("data/processed/news/fnspid_headlines_2m.csv")
+NEWS_PATH = Path("data/processed/news/fnspid_sp500.parquet")
 MARKET_PATH = Path("data/raw/market/sp500_ohlc.csv")
 OUT_DIR = Path("outputs/eda/market_news")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def main():
     # --- Noticias ---
-    news = pd.read_csv(NEWS_PATH, parse_dates=["date"])
+    news = pd.read_parquet(NEWS_PATH)
+    news["date"] = pd.to_datetime(news["date"]).dt.normalize()
     news_daily = (
         news
         .groupby("date")
@@ -22,13 +23,8 @@ def main():
     # --- Mercado ---
     mkt = pd.read_csv(MARKET_PATH, parse_dates=["date"])
     mkt = mkt.sort_values("date")
-
-    # Retornos diarios
     mkt["ret"] = mkt["close"].pct_change()
-
-    # Volatilidad rolling (21 días ~ 1 mes)
     mkt["vol_21d"] = mkt["ret"].rolling(21).std()
-
     mkt = mkt.set_index("date")[["vol_21d"]]
 
     # --- Merge ---
@@ -36,7 +32,6 @@ def main():
 
     # --- Plot ---
     fig, ax1 = plt.subplots(figsize=(12, 6))
-
     ax1.plot(df.index, df["vol_21d"], color="tab:red", label="Volatilidad SP500 (21d)")
     ax1.set_ylabel("Volatilidad", color="tab:red")
     ax1.tick_params(axis="y", labelcolor="tab:red")

@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-NEWS_DIR = Path("outputs/eda/ticker_quality_raw")  # carpeta con los parquets
+NEWS_PATH = Path("data/processed/news/fnspid_sp500.parquet")
 OUT_DIR = Path("outputs/eda/news")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -37,8 +37,7 @@ def top_words(series: pd.Series) -> pd.Series:
 def main():
     # ---- CARGA DESDE PARQUET ----
     print("Cargando parquets...")
-    files = sorted(glob.glob(str(NEWS_DIR / "*.parquet")))
-    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    df = pd.read_parquet(NEWS_PATH)
     print(f"Filas cargadas: {len(df):,}")
 
     # Normalizar nombres de columnas

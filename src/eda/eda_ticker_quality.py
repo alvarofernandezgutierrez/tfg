@@ -3,17 +3,13 @@ import glob
 from pathlib import Path
 
 # -------- PATHS --------
-NEWS_DIR = Path("outputs/eda/ticker_quality_raw")
+NEWS_PATH = Path("data/processed/news/fnspid_sp500.parquet")
 OUT_DIR = Path("outputs/eda/ticker_quality")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def main():
-    print("Loading news dataset...")
-
-    # ---- CAMBIO PRINCIPAL: leer parquets en lugar de CSV ----
-    files = sorted(glob.glob(str(NEWS_DIR / "*.parquet")))
-    news = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
-
+    print("Cargando parquets...")
+    news = pd.read_parquet(NEWS_PATH)
     print(f"Total rows: {len(news)}")
 
     col_mapping = {}

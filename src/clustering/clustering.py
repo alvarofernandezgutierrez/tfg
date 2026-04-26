@@ -9,33 +9,27 @@ import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings("ignore")
 
-IN_PATH = Path("data/processed/market_sentiment.parquet")
-OUT_DIR = Path("outputs/clustering")
+DEBUG_MODE = False
+IN_PATH = Path("data/processed/clustering_dataset_debug.parquet") if DEBUG_MODE else Path("data/processed/clustering_dataset.parquet")
+OUT_DIR = Path("outputs/clustering_debug") if DEBUG_MODE else Path("outputs/clustering")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-FEATURES = ["sentiment_score_mean", "ret", "vol_30d"]
-N_CLUSTERS = 3  # regímenes: pánico, calma, euforia
+N_CLUSTERS = 3
 
-def main():
-    # ---- 1. Cargar datos ----
-    print("Cargando datos...")
-    df = pd.read_parquet(IN_PATH)
-    df = df.dropna(subset=FEATURES).reset_index(drop=True)
-    print(f"Filas para clustering: {len(df):,}")
+FEATURES_TECH = [
+    "RSI_sp500", "MA50_ratio_sp500", "MA200_ratio_sp500",
+    "mom21_sp500", "mom126_sp500",
+    "vol30d_sp500", "vol252d_sp500",
+    "skew30d_sp500", "skew252d_sp500"
+]
 
-    # ---- 2. Features y escalado ----
-    X = df[FEATURES].values
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+def get_sentiment_cols(df):
+    return [c for c in df.columns if c.startswith("sentiment_avg_") or c.startswith("sentiment_std_")]
 
-    # ============================
-    # K-MEANS
-    # ============================
-    print("\n--- K-Means ---")
+def run_kmeans(X_scaled, df, label_prefix, n_clusters=N_CLUSTERS):
+    print(f"\n--- K-Means ({label_prefix}) ---")
 
-    # Elegir número óptimo de clusters (elbow + silhouette)
-    inertias = []
-    silhouettes = []
+    inertias, silhouettes = [], []
     ks = range(2, 8)
     for k in ks:
         km = KMeans(n_clusters=k, random_state=42, n_init=10)
@@ -43,81 +37,136 @@ def main():
         inertias.append(km.inertia_)
         silhouettes.append(silhouette_score(X_scaled, labels))
 
-    # Gráfico elbow
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     ax1.plot(ks, inertias, marker="o")
-    ax1.set_title("K-Means — Elbow")
+    ax1.set_title(f"K-Means Elbow — {label_prefix}")
     ax1.set_xlabel("Número de clusters")
     ax1.set_ylabel("Inertia")
     ax2.plot(ks, silhouettes, marker="o", color="orange")
-    ax2.set_title("K-Means — Silhouette")
+    ax2.set_title(f"K-Means Silhouette — {label_prefix}")
     ax2.set_xlabel("Número de clusters")
     ax2.set_ylabel("Silhouette score")
     plt.tight_layout()
-    plt.savefig(OUT_DIR / "kmeans_elbow_silhouette.png", dpi=200)
+    plt.savefig(OUT_DIR / f"kmeans_elbow_silhouette_{label_prefix}.png", dpi=200)
     plt.close()
 
-    # Ajustar con N_CLUSTERS
-    km_final = KMeans(n_clusters=N_CLUSTERS, random_state=42, n_init=10)
-    df["kmeans_cluster"] = km_final.fit_predict(X_scaled)
-    print(f"Silhouette score (k={N_CLUSTERS}): {silhouette_score(X_scaled, df['kmeans_cluster']):.4f}")
+    km_final = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    labels = km_final.fit_predict(X_scaled)
+    sil = silhouette_score(X_scaled, labels)
+    print(f"Silhouette score (k={n_clusters}): {sil:.4f}")
     print("Distribución de clusters:")
-    print(df["kmeans_cluster"].value_counts().sort_index())
+    print(pd.Series(labels).value_counts().sort_index())
+    print("\nPerfil de clusters (medias de indicadores técnicos):")
+    profile = df.copy()
+    profile[f"kmeans_{label_prefix}"] = labels
+    print(profile.groupby(f"kmeans_{label_prefix}")[FEATURES_TECH].mean().round(4))
+    return sil, labels
 
-    # Perfil de cada cluster
-    print("\nPerfil de clusters (medias):")
-    print(df.groupby("kmeans_cluster")[FEATURES].mean().round(4))
+def run_hmm(df_daily, features, label_prefix, n_clusters=N_CLUSTERS):
+    print(f"\n--- HMM ({label_prefix}) ---")
 
-    # ============================
-    # HMM
-    # ============================
-    print("\n--- HMM ---")
+    df_hmm = df_daily[["date"] + features].copy().sort_values("date").reset_index(drop=True)
 
-    # HMM necesita serie temporal ordenada — agregar por fecha
-    df_hmm = (
-        df.groupby("date")[FEATURES]
-        .mean()
-        .sort_index()
-        .reset_index()
-    )
-    X_hmm = df_hmm[FEATURES].values
-    X_hmm_scaled = scaler.fit_transform(X_hmm)
+    scaler = StandardScaler()
+    X_hmm = scaler.fit_transform(df_hmm[features].values)
 
     hmm = GaussianHMM(
-        n_components=N_CLUSTERS,
+        n_components=n_clusters,
         covariance_type="full",
-        n_iter=200,
-        random_state=42
+        n_iter=1000,
+        random_state=42,
+        min_covar=1e-3
     )
-    hmm.fit(X_hmm_scaled)
-    df_hmm["hmm_state"] = hmm.predict(X_hmm_scaled)
+    hmm.fit(X_hmm)
+    df_hmm[f"hmm_{label_prefix}"] = hmm.predict(X_hmm)
 
     print("Distribución de estados HMM:")
-    print(df_hmm["hmm_state"].value_counts().sort_index())
-    print("\nPerfil de estados HMM (medias):")
-    print(df_hmm.groupby("hmm_state")[FEATURES].mean().round(4))
+    print(df_hmm[f"hmm_{label_prefix}"].value_counts().sort_index())
+    print(f"\nPerfil de estados HMM (medias de features del modelo):")
+    print(df_hmm.groupby(f"hmm_{label_prefix}")[FEATURES_TECH].mean().round(4))
 
-    # Gráfico HMM — estados a lo largo del tiempo
+    colors = ["tab:blue", "tab:orange", "tab:red"]
     plt.figure(figsize=(14, 4))
-    for state in range(N_CLUSTERS):
-        mask = df_hmm["hmm_state"] == state
-        plt.scatter(df_hmm.loc[mask, "date"], df_hmm.loc[mask, "ret"],
-                    label=f"Estado {state}", s=10, alpha=0.6)
-    plt.title("Estados HMM a lo largo del tiempo")
+    for state in range(n_clusters):
+        mask = df_hmm[f"hmm_{label_prefix}"] == state
+        plt.scatter(
+            df_hmm.loc[mask, "date"],
+            df_hmm.loc[mask, "vol30d_sp500"],
+            label=f"Estado {state}",
+            s=10, alpha=0.6,
+            color=colors[state]
+        )
+    plt.title(f"Estados HMM a lo largo del tiempo — {label_prefix}")
     plt.xlabel("Fecha")
-    plt.ylabel("Retorno diario")
+    plt.ylabel("Volatilidad 30d")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(OUT_DIR / "hmm_states_time.png", dpi=200)
+    plt.savefig(OUT_DIR / f"hmm_states_time_{label_prefix}.png", dpi=200)
     plt.close()
 
+    return df_hmm[["date", f"hmm_{label_prefix}"]]
+
+def main():
+    print(f"{'[DEBUG MODE]' if DEBUG_MODE else '[FULL MODE]'}")
+    print("Cargando dataset...")
+    df = pd.read_parquet(IN_PATH)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df = df.dropna(subset=FEATURES_TECH).reset_index(drop=True)
+    print(f"Filas para clustering: {len(df):,}")
+    print(f"Columnas: {len(df.columns)}")
+
+    sentiment_cols = get_sentiment_cols(df)
+    FEATURES_ALL = FEATURES_TECH + sentiment_cols
+
+    rows_per_date = df.groupby("date").size()
+    print(f"\nFilas por fecha — media: {rows_per_date.mean():.2f}, max: {rows_per_date.max()}")
+
+    df_daily = df.drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
+    print(f"Días únicos para HMM: {len(df_daily):,}")
+
     # ============================
-    # GUARDAR RESULTADOS
+    # MODELO A — Solo técnicos
     # ============================
-    # Merge HMM states de vuelta al df principal
-    df = df.merge(df_hmm[["date", "hmm_state"]], on="date", how="left")
+    print("\n" + "="*50)
+    print("MODELO A — Solo indicadores técnicos")
+    print("="*50)
+    scaler_A = StandardScaler()
+    X_A = scaler_A.fit_transform(df[FEATURES_TECH].values)
+    sil_A, labels_A = run_kmeans(X_A, df, label_prefix="tech")
+    hmm_A = run_hmm(df_daily, features=FEATURES_TECH, label_prefix="tech")
+
+    # ============================
+    # MODELO B — Técnicos + sentimiento
+    # ============================
+    print("\n" + "="*50)
+    print("MODELO B — Indicadores técnicos + sentimiento sectorial")
+    print("="*50)
+    scaler_B = StandardScaler()
+    X_B = scaler_B.fit_transform(df[FEATURES_ALL].values)
+    sil_B, labels_B = run_kmeans(X_B, df, label_prefix="tech_sent")
+    hmm_B = run_hmm(df_daily, features=FEATURES_ALL, label_prefix="tech_sent")
+
+    # ============================
+    # COMPARATIVA
+    # ============================
+    print("\n" + "="*50)
+    print("COMPARATIVA DE MODELOS")
+    print("="*50)
+    print(f"Silhouette K-Means Modelo A (solo técnicos):          {sil_A:.4f}")
+    print(f"Silhouette K-Means Modelo B (técnicos + sentimiento): {sil_B:.4f}")
+    print(f"Mejora al añadir sentimiento: {sil_B - sil_A:+.4f}")
+
+    # ============================
+    # GUARDAR
+    # ============================
+    df["kmeans_tech"] = labels_A
+    df["kmeans_tech_sent"] = labels_B
+    df = df.merge(hmm_A, on="date", how="left")
+    df = df.merge(hmm_B, on="date", how="left")
+
     df.to_parquet(OUT_DIR / "clustered_data.parquet", index=False)
     print(f"\n✅ Guardado en: {OUT_DIR / 'clustered_data.parquet'}")
+    print(f"Columnas finales: {df.columns.tolist()}")
 
 if __name__ == "__main__":
     main()
