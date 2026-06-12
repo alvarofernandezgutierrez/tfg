@@ -1,0 +1,66 @@
+% ============================================================
+%  MAIN.TEX
+%  Analysis of Market Regimes through Sentiment Extraction
+%  from Financial News and Clustering Techniques
+%
+%  Bachelor's Thesis (TFG) -- Grado en Ingeniería Matemática
+%  e Inteligencia Artificial -- ICAI, Universidad Pontificia
+%  Comillas
+%
+%  Author:     Álvaro Fernández Gutiérrez
+%  Supervisor: Guillermo Mestre Marcos
+% ============================================================
+\documentclass[12pt,a4paper,oneside]{report}
+
+\input{preamble}
+
+\begin{document}
+
+% ------------------------------------------------------------
+% PRELIMINARY PAGES (roman numbering)
+% ------------------------------------------------------------
+\pagenumbering{roman}
+
+\input{portada}
+
+% --- Resumen (Spanish) --------------------------------------
+\selectlanguage{spanish}
+\input{resumen}
+\selectlanguage{english}
+
+% --- Abstract (English) ---------------------------------------
+\input{abstract}
+
+% --- Tables of contents, figures, tables ------------------------
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+\clearpage
+
+% ------------------------------------------------------------
+% MAIN MATTER (arabic numbering)
+% ------------------------------------------------------------
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{chapters/ch1_introduction}
+\input{chapters/ch2_state_of_the_art}
+\input{chapters/ch3_methodology}
+\input{chapters/ch4_results}
+\input{chapters/ch5_conclusions}
+
+% ------------------------------------------------------------
+% BIBLIOGRAPHY
+% ------------------------------------------------------------
+\printbibliography[heading=bibintoc,title={Bibliography}]
+
+% ------------------------------------------------------------
+% ANNEXES
+% ------------------------------------------------------------
+\appendix
+\input{annexes/annexA_pipeline}
+\input{annexes/annexB_tables}
+
+\end{document}

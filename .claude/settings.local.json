@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python src/eda/eda_sentiment_smoothing.py)"
+      "Bash(python src/eda/eda_sentiment_smoothing.py)",
+      "PowerShell(Import-Csv *)"
     ]
   }
 }

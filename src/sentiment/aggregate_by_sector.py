@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 
 DEBUG_MODE = False
+SMOOTH_WINDOW = 21
 SENTIMENT_PATH = Path("data/processed/news/fnspid_sentiment_debug.parquet") if DEBUG_MODE else Path("data/processed/news/fnspid_sentiment.parquet")
 GICS_PATH = Path("data/raw/market/ticker_gics_mapping.csv")
 OUT_PATH = Path("data/processed/news/fnspid_sentiment_by_sector_debug.parquet") if DEBUG_MODE else Path("data/processed/news/fnspid_sentiment_by_sector.parquet")
@@ -45,7 +46,10 @@ def main():
     pivot_std = agg.pivot(index="date", columns="sector", values="sentiment_std")
     pivot_std.columns = [f"sentiment_std_{c.replace(' ', '_')}" for c in pivot_std.columns]
 
-    final = pd.concat([pivot_avg, pivot_std], axis=1).reset_index()
+    pivot_smooth = pivot_avg.rolling(window=SMOOTH_WINDOW, min_periods=1).mean()
+    pivot_smooth.columns = [f"{c}_smooth" for c in pivot_smooth.columns]
+
+    final = pd.concat([pivot_avg, pivot_std, pivot_smooth], axis=1).reset_index()
     sentiment_cols = [c for c in final.columns if c != "date"]
     final[sentiment_cols] = final[sentiment_cols].fillna(0)
 

@@ -1,0 +1,214 @@
+\chapter*{Resumen del Proyecto}
+\addcontentsline{toc}{chapter}{Resumen del Proyecto}
+\markboth{Resumen del Proyecto}{Resumen del Proyecto}
+
+Los mercados financieros no se comportan de manera homogénea a lo largo
+del tiempo: alternan periodos de crecimiento sostenido, fases de caída
+prolongada y episodios de inestabilidad extrema en los que la volatilidad
+se dispara y las correlaciones entre activos se rompen. Estos
+``regímenes de mercado'' --- habitualmente descritos de forma informal
+como mercados \emph{alcistas} (\textit{bull}), \emph{bajistas}
+(\textit{bear}) y de \emph{crisis} --- condicionan de manera directa la
+gestión del riesgo, la asignación de activos y la toma de decisiones de
+inversión. Identificar de forma objetiva y automática en qué régimen se
+encuentra el mercado en cada momento es, por tanto, un problema de gran
+interés tanto académico como práctico.
+
+La literatura tradicional ha abordado este problema empleando
+principalmente variables técnicas y de precio --- rentabilidades,
+volatilidad, medias móviles, momentum --- combinadas con métodos
+estadísticos como los modelos de Markov de cambio de régimen
+(\textit{regime-switching}) o técnicas de aprendizaje no supervisado como
+\textit{K-Means}. Sin embargo, estas variables son, por construcción,
+\emph{retrospectivas}: reflejan movimientos de precio que ya se han
+producido. En paralelo, el auge de los modelos de lenguaje basados en
+\textit{Transformers} y, en particular, de modelos especializados en
+lenguaje financiero como \textit{FinBERT}, ha abierto la posibilidad de
+extraer de manera sistemática el tono emocional --- positivo, negativo o
+neutro --- de grandes volúmenes de noticias financieras, proporcionando
+una fuente de información \emph{contemporánea} y potencialmente
+complementaria a los indicadores técnicos clásicos.
+
+Este Trabajo de Fin de Grado plantea, diseña e implementa un pipeline
+completo de extremo a extremo que combina ambas fuentes de información
+--- precio/indicadores técnicos y sentimiento extraído de noticias
+financieras --- con el objetivo de identificar regímenes de mercado
+mediante técnicas de \textit{clustering} no supervisado, y de evaluar de
+forma rigurosa si la incorporación del sentimiento mejora la calidad y la
+interpretabilidad económica de los regímenes detectados frente a un
+enfoque puramente técnico.
+
+\section*{Objetivos}
+
+El objetivo general del proyecto es \textbf{desarrollar y validar una
+metodología de detección de regímenes de mercado basada en técnicas de
+\textit{clustering}, comparando un modelo que utiliza únicamente
+indicadores técnicos del S\&P 500 frente a modelos que incorporan
+información de sentimiento sectorial extraída de noticias financieras
+mediante FinBERT}. De este objetivo general se derivan los siguientes
+objetivos específicos:
+
+\begin{itemize}
+  \item Construir un \textit{dataset} unificado que combine indicadores
+  técnicos diarios del índice S\&P 500 con un indicador de sentimiento
+  agregado por sector GICS, obtenido a partir del conjunto de noticias
+  financieras \textit{FNSPID}.
+  \item Diseñar y aplicar un procedimiento reproducible de cálculo de
+  sentimiento mediante el modelo \textit{FinBERT}, así como un esquema de
+  agregación y suavizado temporal de dicho sentimiento a nivel sectorial.
+  \item Construir tres modelos de \textit{clustering} (\textit{K-Means})
+  alternativos --- técnico, técnico+sentimiento y sentimiento suavizado
+  --- y compararlos mediante métricas internas (coeficiente de
+  \textit{silhouette}, análisis de componentes principales) e
+  \textit{importancia de variables}.
+  \item Incorporar un modelo de \textit{Hidden Markov Model} (HMM) como
+  método de comparación secundario, evaluando sus diferencias frente a
+  \textit{K-Means} en términos de estabilidad temporal y diferenciación
+  económica de los regímenes.
+  \item Validar económicamente los regímenes obtenidos mediante el
+  cálculo de rentabilidad anualizada, volatilidad, \textit{ratio} de
+  Sharpe, \textit{drawdown} y otras métricas, desagregadas por sector
+  GICS y por régimen.
+\end{itemize}
+
+\section*{Metodología}
+
+El pipeline desarrollado, representado de forma esquemática en la
+\autoref{fig:resumen-pipeline}, consta de las siguientes etapas
+principales:
+
+\begin{enumerate}
+  \item \textbf{Adquisición y filtrado de datos}: se parte del
+  \textit{dataset} público \textit{FNSPID} (Financial News and Stock
+  Price Integration Dataset), que contiene titulares de noticias
+  financieras asociados a tickers del mercado estadounidense. Las
+  noticias se filtran para conservar únicamente aquellas asociadas a
+  empresas que formaban parte del índice S\&P 500 en la fecha de
+  publicación correspondiente, y se reasignan al siguiente día de
+  mercado abierto para evitar fugas de información (\textit{look-ahead
+  bias}).
+  \item \textbf{Cálculo de sentimiento con FinBERT}: cada titular se
+  procesa con el modelo \textit{ProsusAI/FinBERT}, obteniéndose las
+  probabilidades $p_{\text{pos}}$, $p_{\text{neg}}$ y $p_{\text{neu}}$.
+  Se define una puntuación de sentimiento continua
+  $s = p_{\text{pos}} - p_{\text{neg}} \in [-1,1]$ y una etiqueta
+  categórica (positivo/negativo/neutro) obtenida como el argumento
+  máximo de las tres probabilidades.
+  \item \textbf{Agregación sectorial}: cada ticker se mapea a su sector
+  GICS correspondiente (11 sectores), y para cada combinación
+  (fecha, sector) se calculan la media y la desviación típica del
+  sentimiento de todas las noticias publicadas. Dado el carácter ruidoso
+  de la señal diaria, se aplica adicionalmente una media móvil de 21
+  sesiones (\textit{MA21}) que reduce sustancialmente el ruido de alta
+  frecuencia mientras preserva las tendencias de medio plazo del
+  sentimiento sectorial.
+  \item \textbf{Indicadores técnicos}: a partir de los precios diarios
+  del S\&P 500 se calculan nueve indicadores técnicos --- RSI, ratios
+  respecto a medias móviles de 50 y 200 sesiones, \textit{momentum} a 21
+  y 126 sesiones, volatilidad realizada a 30 y 252 sesiones, y
+  \textit{skewness} de los retornos a 30 y 252 sesiones.
+  \item \textbf{Construcción del \textit{dataset} de clustering}: se
+  combinan los indicadores técnicos y las variables de sentimiento
+  sectorial (\textit{crudas} y suavizadas) en un único \textit{dataset}
+  diario, obteniéndose un total de 1132 observaciones en el rango
+  comprendido entre mayo de 2009 y febrero de 2024.
+  \item \textbf{\textit{Clustering} con K-Means}: se entrenan tres
+  modelos --- \textbf{Modelo A} (solo indicadores técnicos), \textbf{Modelo
+  B} (indicadores técnicos + sentimiento sectorial crudo) y
+  \textbf{Modelo C} (solo sentimiento sectorial suavizado) --- con
+  $K=3$, seleccionado mediante el método del codo y el coeficiente de
+  \textit{silhouette}. Adicionalmente se entrena un \textbf{modelo HMM}
+  (\textit{Gaussian Hidden Markov Model}, covarianza completa, $K=3$
+  estados) sobre los mismos conjuntos de variables como método de
+  comparación.
+  \item \textbf{Etiquetado e interpretación de regímenes}: los
+  \textit{clusters} obtenidos se etiquetan como \emph{Bull},
+  \emph{Bear} o \emph{Crisis} mediante el análisis de los centroides
+  (momentum, volatilidad y RSI medios de cada \textit{cluster}).
+  \item \textbf{Validación económica}: para cada combinación de
+  sector GICS y régimen se calculan rentabilidad anualizada,
+  volatilidad anualizada, \textit{ratio} de Sharpe ($r_f=2\%$),
+  \textit{drawdown} máximo, porcentaje de días positivos y los
+  retornos diarios extremos (mejor y peor día).
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  % TODO: insertar figura del pipeline completo (diagrama de bloques)
+  \fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}
+  Diagrama de bloques del pipeline completo: FNSPID
+  $\rightarrow$ filtrado S\&P 500 $\rightarrow$ FinBERT $\rightarrow$
+  agregación sectorial GICS (media/std + MA21) $\rightarrow$ indicadores
+  técnicos S\&P 500 $\rightarrow$ \textit{dataset} de clustering
+  $\rightarrow$ K-Means (Modelos A/B/C) y HMM $\rightarrow$ validación
+  económica por sector y régimen.\vspace{3cm}}}
+  \caption{Esquema general del pipeline desarrollado en este proyecto.}
+  \label{fig:resumen-pipeline}
+\end{figure}
+
+\section*{Resultados principales}
+
+El análisis del coeficiente de \textit{silhouette} en un espacio común de
+componentes principales (reteniendo el 80\% de la varianza explicada)
+muestra que el \textbf{Modelo A (técnico)} obtiene la mejor cohesión
+interna (\textit{silhouette} $\approx 0.193$), seguido del \textbf{Modelo
+B (técnico + sentimiento)} ($\approx 0.178$) y, por último, del
+\textbf{Modelo C (solo sentimiento suavizado)} ($\approx 0.162$). Esto
+indica que las variables técnicas siguen siendo las que mejor separan
+estructuralmente los datos, y que el sentimiento por sí solo no es
+suficiente para definir \textit{clusters} bien diferenciados.
+
+Sin embargo, la \textbf{validación económica} revela un panorama más
+matizado. El Modelo B, que incorpora sentimiento sectorial junto con los
+indicadores técnicos, produce regímenes con una diferenciación económica
+\emph{más marcada} que el Modelo A: el régimen \emph{Bear} del Modelo B
+presenta \textit{ratios} de Sharpe negativos en prácticamente todos los
+sectores (p.\ ej., $-0.36$ en \textit{Financial Services} o $-0.26$ en
+\textit{Energy}), mientras que el régimen \emph{Crisis} concentra, de
+forma contraintuitiva, las rentabilidades anualizadas más elevadas (hasta
+$+91.9\%$ en \textit{Real Estate}), reflejando episodios de alta
+volatilidad con fuertes recuperaciones (\textit{rebounds}). El sector
+\textit{Energy} en régimen \emph{Bear} presenta el \textit{drawdown}
+máximo más severo de todo el análisis ($-74.9\%$), así como el mejor y el
+peor día individual de toda la muestra ($+16.9\%$ y $-24.7\%$,
+respectivamente), lo que evidencia la naturaleza extremadamente volátil
+de dicho régimen.
+
+El \textbf{Modelo C}, basado exclusivamente en sentimiento suavizado,
+produce centroides prácticamente indistinguibles en las variables
+técnicas (p.\ ej., el ratio respecto a la media móvil de 50 sesiones varía
+entre 1.0086 y 1.0134 entre regímenes), lo que constituye un
+\emph{resultado negativo relevante}: el sentimiento agregado por sí solo,
+sin información de precio, no logra capturar la dinámica de los regímenes
+de mercado con la misma nitidez que los indicadores técnicos.
+
+La comparación con el modelo \textbf{HMM} muestra que, si bien ambos
+métodos identifican regímenes cualitativamente similares, \textit{K-Means}
+produce una diferenciación económica \emph{mucho más pronunciada} entre
+regímenes (\textit{ratios} de Sharpe que oscilan aproximadamente entre
+$-3.1$ y $+3.8$), mientras que el HMM genera estados con \textit{ratios}
+de Sharpe mucho más moderados (entre $-0.6$ y $+1.5$ aproximadamente),
+consistente con su naturaleza de modelo generativo con transiciones
+suaves entre estados.
+
+\section*{Conclusiones}
+
+Los resultados obtenidos confirman que los indicadores técnicos
+constituyen la base más sólida para la detección de regímenes de mercado
+mediante \textit{clustering}, pero que la incorporación de sentimiento
+sectorial extraído mediante FinBERT \textbf{aporta valor incremental en
+términos de diferenciación económica} de los regímenes resultantes, en
+particular para distinguir episodios de \emph{Bear market} sostenido
+frente a episodios de \emph{Crisis} de alta volatilidad con fuertes
+oscilaciones. Estos hallazgos abren la puerta a líneas de trabajo futuras
+orientadas a la combinación dinámica de ambas fuentes de información, a
+la extensión del análisis a otros índices y mercados, y a la exploración
+de arquitecturas de \textit{deep learning} secuenciales para la detección
+de regímenes.
+
+\vspace{1cm}
+\noindent\textbf{Palabras clave:} regímenes de mercado, \textit{clustering},
+K-Means, \textit{Hidden Markov Model}, análisis de sentimiento, FinBERT,
+noticias financieras, FNSPID, S\&P 500, validación económica.
+
+\clearpage

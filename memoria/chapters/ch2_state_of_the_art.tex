@@ -1,0 +1,340 @@
+\chapter{State of the Art}
+\label{ch:soa}
+
+This chapter reviews the literature relevant to the two main pillars of
+this thesis: the detection of market regimes through statistical and
+machine learning methods (\Cref{sec:soa-regimes}), and the extraction of
+sentiment from financial text using lexicon-based and deep learning
+methods, with particular emphasis on FinBERT and the FNSPID dataset
+(\Cref{sec:soa-sentiment}). The chapter closes with a discussion of how
+these two strands of research have (rarely) been combined, and identifies
+the specific gap addressed by this thesis (\Cref{sec:soa-gap}).
+
+\section{Market Regime Detection}
+\label{sec:soa-regimes}
+
+\subsection{Markov-Switching Models and Hidden Markov Models}
+\label{sec:soa-hmm}
+
+The idea that the parameters governing the evolution of a financial or
+macroeconomic time series can switch between a finite number of
+``regimes'' was formalized by Hamilton \cite{hamilton1989}, who proposed a
+Markov-switching autoregressive model in which an unobserved discrete
+state variable $S_t \in \{1, \dots, K\}$ follows a first-order Markov
+chain, and the conditional distribution of the observed series at time
+$t$ depends on $S_t$. This framework naturally accommodates the empirical
+observation that asset returns exhibit periods of low volatility and
+positive drift (\emph{bull} regimes) interspersed with periods of high
+volatility and negative drift (\emph{bear} or \emph{crisis} regimes).
+
+A \textbf{Hidden Markov Model (HMM)} is a special case of this framework
+in which the observed variables are conditionally independent given the
+hidden state, and the state sequence evolves according to a transition
+probability matrix $A \in \mathbb{R}^{K \times K}$, with
+$A_{ij} = P(S_{t+1}=j \mid S_t = i)$. For continuous observations, each
+state $k$ is typically associated with a multivariate Gaussian (or
+Gaussian-mixture) emission distribution
+$\mathcal{N}(\boldsymbol{\mu}_k, \Sigma_k)$. The classical algorithms for
+inference and learning in HMMs --- the forward-backward algorithm for
+computing state posteriors, the Viterbi algorithm for the most likely
+state sequence, and the Baum-Welch (EM) algorithm for parameter
+estimation --- were popularized in the speech-recognition literature by
+Rabiner's tutorial \cite{rabiner1989hmm} and have since become a standard
+tool in quantitative finance.
+
+In financial applications, Gaussian HMMs have been used extensively for
+regime-based asset allocation. Guidolin \cite{guidolin2011} provides a
+comprehensive survey of Markov-switching models in empirical finance,
+covering applications to asset allocation, derivatives pricing and risk
+management. More recently, Nystrup et al. \cite{nystrup2020} demonstrate
+that regime-switching models, including HMMs with time-varying transition
+probabilities, can be used to dynamically adjust portfolio risk exposure,
+improving risk-adjusted returns relative to static allocations. A
+recurring theme in this literature is that HMMs naturally model the
+\emph{persistence} of regimes --- once the chain enters a given state, it
+tends to remain there for several periods, governed by the diagonal
+entries of $A$ --- which is a desirable property for regimes that are
+expected to last from weeks to months.
+
+However, HMMs also have well-documented limitations. First, the number of
+states $K$ must be chosen a priori (or selected via information criteria
+such as AIC/BIC), and increasing $K$ rapidly increases the number of free
+parameters, particularly for full covariance matrices, which scale as
+$O(d^2)$ in the dimensionality $d$ of the observation vector. Second,
+because emission distributions are typically assumed Gaussian, HMMs can
+struggle to capture regimes characterized by extreme, fat-tailed moves
+unless the covariance structure is allowed to be sufficiently flexible.
+Third, and most relevant to this thesis, the \emph{smoothness} imposed by
+the transition matrix --- which is precisely what gives HMMs their
+temporal coherence --- can also cause the model to assign similar,
+``averaged'' emission parameters to states that, from an economic
+standpoint, would ideally be much more sharply differentiated. This
+trade-off between temporal coherence and economic differentiation is
+revisited empirically in \Cref{ch:results} of this thesis.
+
+\subsection{Clustering-Based Approaches: K-Means}
+\label{sec:soa-kmeans}
+
+An alternative to explicitly modeling temporal transition dynamics is to
+treat regime detection as an \emph{unsupervised clustering} problem:
+given a set of $N$ feature vectors $\mathbf{x}_t \in \mathbb{R}^d$ (one
+per trading day, typically composed of returns, volatility measures,
+momentum indicators, etc.), partition them into $K$ groups such that
+observations within a group are more similar to each other than to
+observations in other groups, \emph{without} explicitly modeling the
+sequence of transitions between groups.
+
+The \textbf{K-Means} algorithm \cite{macqueen1967,lloyd1982} is the most
+widely used method for this purpose. Given $K$, it seeks to find cluster
+assignments $c_t \in \{1, \dots, K\}$ and centroids
+$\boldsymbol{\mu}_1, \dots, \boldsymbol{\mu}_K \in \mathbb{R}^d$ that
+minimize the within-cluster sum of squares:
+
+\begin{equation}
+  \label{eq:soa-kmeans-objective}
+  J = \sum_{t=1}^{N} \left\lVert \mathbf{x}_t - \boldsymbol{\mu}_{c_t}
+  \right\rVert_2^2 .
+\end{equation}
+
+The algorithm alternates between (i) assigning each observation to its
+nearest centroid, and (ii) recomputing each centroid as the mean of the
+observations assigned to it, until convergence to a local optimum of
+\Cref{eq:soa-kmeans-objective}. Because \Cref{eq:soa-kmeans-objective} is
+non-convex, the algorithm is typically run multiple times from different
+random initializations (e.g., using the \texttt{k-means++}
+initialization scheme), and the solution with the lowest objective value
+is retained, as implemented in \texttt{scikit-learn}
+\cite{pedregosa2011sklearn}.
+
+Compared to HMMs, \textit{K-Means} has two practical advantages for
+exploratory regime analysis. First, it does not impose any explicit
+temporal structure, which means that the resulting partition reflects
+purely the \emph{static} similarity of the feature vectors --- two days
+with similar momentum, volatility and RSI values will be assigned to the
+same cluster regardless of how far apart they are in time. This can
+produce \emph{sharper} clusters in feature space, at the cost of
+potentially noisier (less persistent) regime sequences over time. Second,
+\textit{K-Means} scales linearly with the number of observations and
+features, making it computationally inexpensive even for relatively large
+datasets and high-dimensional feature vectors (such as those that include
+sector-level sentiment variables, as in this thesis).
+
+The choice of the number of clusters $K$ is typically guided by the
+\textbf{elbow method} (plotting $J$ as a function of $K$ and looking for a
+point of diminishing returns) and the \textbf{silhouette coefficient},
+which for a given observation $i$ is defined as
+
+\begin{equation}
+  \label{eq:soa-silhouette}
+  s(i) = \frac{b(i) - a(i)}{\max\{a(i), b(i)\}},
+\end{equation}
+
+where $a(i)$ is the mean distance between $i$ and the other points in its
+own cluster, and $b(i)$ is the smallest mean distance between $i$ and the
+points in any other cluster. The silhouette coefficient ranges from $-1$
+to $1$, with values close to $1$ indicating well-separated, cohesive
+clusters. In financial applications, $K=3$ is a particularly common
+choice, as it maps naturally onto the \emph{bull / bear / crisis}
+trichotomy that is widely used by practitioners.
+
+\subsection{Limitations of Existing Approaches}
+\label{sec:soa-limitations}
+
+Both HMMs and \textit{K-Means} share a common limitation when applied to
+market regime detection using only price-derived (technical) features:
+the feature vectors are, by construction, \emph{backward-looking}. RSI,
+moving-average ratios, momentum and realized volatility are all functions
+of \emph{past} prices. As a consequence, regime changes detected by these
+models are necessarily \emph{lagged} relative to the underlying economic
+or informational shock that triggered them --- the model can only
+``see'' a change in regime once it is already reflected in price
+dynamics.
+
+This observation motivates the search for \emph{additional} features
+that might carry more contemporaneous information about the state of the
+market. Sentiment extracted from financial news is a natural candidate:
+news about a company, sector or the macroeconomy is, in principle,
+available essentially in real time, and may reflect information that has
+not yet been fully incorporated into prices. The next section reviews the
+literature on sentiment analysis in finance, leading up to the
+FinBERT model and the FNSPID dataset used in this thesis.
+
+\section{Sentiment Analysis in Finance}
+\label{sec:soa-sentiment}
+
+\subsection{Lexicon-Based Methods}
+\label{sec:soa-lexicon}
+
+The earliest approaches to extracting sentiment from financial text
+relied on \textbf{word-list (lexicon) based methods}: a document's
+sentiment score is computed by counting the occurrences of words that
+belong to predefined ``positive'' and ``negative'' word lists, often
+normalized by document length. A landmark study by Loughran and McDonald
+\cite{loughranmcdonald2011} showed that approximately three-quarters of
+the words classified as ``negative'' by the general-purpose Harvard-IV-4
+psychosocial dictionary --- a dictionary widely used in earlier finance
+studies --- are \emph{not} typically perceived as negative in a financial
+context (e.g., words such as ``tax'', ``cost'', ``capital'' or
+``liability'' are common in routine financial disclosures and do not, by
+themselves, signal bad news). They proposed an alternative,
+finance-specific word list, which has since become a standard baseline in
+the accounting and finance literature.
+
+While computationally inexpensive and fully interpretable, lexicon-based
+methods have well-known limitations: they are insensitive to negation and
+context (``did not miss expectations'' may be scored as containing a
+negative word), cannot capture sarcasm or implicit sentiment, and require
+manual curation of word lists for each domain and, often, each language.
+
+\subsection{Sentiment Indices and Market Outcomes}
+\label{sec:soa-sentiment-indices}
+
+A parallel and complementary line of research has focused not on
+classifying individual documents, but on constructing \emph{aggregate
+sentiment indices} and relating them to subsequent market outcomes.
+Tetlock \cite{tetlock2007} analyzed the daily content of a widely-read
+\textit{Wall Street Journal} column using the General Inquirer
+psychological dictionary, and found that unusually pessimistic media
+content predicted downward pressure on market prices, followed by a
+reversion to fundamentals, and that high media pessimism was associated
+with high subsequent trading volume. Baker and Wurgler
+\cite{baker2006} constructed a broader investor sentiment index based on
+six market-based proxies (closed-end fund discounts, trading volume,
+dividend premia, IPO activity, etc.) and showed that this index has
+predictive power for the cross-section of stock returns, particularly for
+stocks that are difficult to value or arbitrage.
+
+More recently, the rise of social media has led to a substantial body of
+work using sentiment extracted from platforms such as Twitter/X to predict
+stock price movements \cite{pagolu2016}, and a broad survey by Xing et al.
+\cite{xing2018} categorizes the field of ``natural language based
+financial forecasting'', covering data sources (news, social media,
+filings), text representations (bag-of-words, embeddings,
+Transformer-based), and forecasting targets (price direction, volatility,
+risk).
+
+\subsection{Deep Learning and Transformer-Based Sentiment Models}
+\label{sec:soa-deep-learning}
+
+The introduction of the \textbf{Transformer} architecture
+\cite{vaswani2017attention}, and in particular of pre-trained
+bidirectional language models such as \textbf{BERT} (Bidirectional
+Encoder Representations from Transformers) \cite{devlin2019bert},
+represented a step change in natural language processing. BERT is
+pre-trained on large unlabeled text corpora using a masked-language-model
+objective, and can subsequently be \emph{fine-tuned} on a relatively small
+labeled dataset for a specific downstream task --- such as sentiment
+classification --- while retaining the rich contextual representations
+learned during pre-training. This approach substantially outperformed
+earlier recurrent and convolutional architectures on a wide range of NLP
+benchmarks, including sentiment analysis.
+
+In the financial domain, Ding et al. \cite{ding2015} had earlier
+demonstrated that deep learning representations of news events (using
+structured event tuples and neural embeddings) could improve stock price
+movement prediction relative to bag-of-words baselines, foreshadowing the
+shift towards learned, contextual representations of financial text that
+would later be accelerated by Transformer-based models.
+
+\subsection{FinBERT}
+\label{sec:soa-finbert}
+
+\textbf{FinBERT} \cite{finbert2019} is a BERT-based language model further
+pre-trained and fine-tuned on financial text (including corporate
+filings, earnings call transcripts and analyst reports) for the specific
+task of \emph{financial sentiment classification}. Given a piece of
+financial text (e.g., a news headline), FinBERT outputs a probability
+distribution over three classes --- \emph{positive}, \emph{negative} and
+\emph{neutral} --- which can be interpreted as the model's confidence that
+the text conveys each type of sentiment from a financial market
+perspective.
+
+Empirically, FinBERT and its successors (such as the
+\texttt{ProsusAI/finbert} checkpoint used in this thesis, which is
+fine-tuned on the Financial PhraseBank dataset of analyst statements) have
+been shown to substantially outperform both lexicon-based methods (e.g.,
+Loughran-McDonald word counts) and general-purpose sentiment classifiers
+on financial text classification benchmarks. Crucially for the present
+work, FinBERT can be applied \emph{at scale} to large corpora of news
+headlines using GPU-accelerated batched inference, making it feasible to
+score millions of headlines spanning more than a decade --- a task that
+would be impractical using more computationally expensive
+generative large language models, and far less domain-appropriate using
+generic lexicons.
+
+In this thesis, FinBERT is used to assign each filtered news headline a
+continuous sentiment score $s = p_{\text{pos}} - p_{\text{neg}} \in
+[-1, 1]$ and a categorical label given by the arg-max of the three class
+probabilities, as described in detail in \Cref{ch:methodology}.
+
+\subsection{The FNSPID Dataset}
+\label{sec:soa-fnspid}
+
+\textbf{FNSPID} (Financial News and Stock Price Integration Dataset)
+\cite{zhang2023fnspid} is a large-scale, publicly available corpus that
+combines several million time-stamped financial news headlines and
+articles for US-listed companies with corresponding historical stock
+price data. Its scale and temporal coverage make it particularly
+well-suited for studies that require aligning news-derived sentiment with
+daily price movements over long horizons, such as the present work, which
+uses FNSPID news spanning the period from 2009 to 2024.
+
+Compared to smaller, manually curated sentiment datasets (such as the
+Financial PhraseBank used to fine-tune FinBERT itself), FNSPID's main
+contribution is \emph{scale and temporal alignment}: it provides the raw
+material from which a sector-level, time-varying sentiment signal can be
+constructed and aligned with technical indicators on a daily basis, which
+is a prerequisite for the clustering-based regime detection methodology
+proposed in this thesis.
+
+\section{Combining Sentiment and Regime Detection: Related Work and Research Gap}
+\label{sec:soa-gap}
+
+A small but growing body of work has begun to combine sentiment-derived
+features with regime-switching or clustering models. For example,
+Abdollahi et al. \cite{abdollahi2024} and Billah et al.
+\cite{billah2024} explore the integration of sentiment signals with
+machine learning models for financial forecasting tasks, while Mudarisov
+et al. \cite{mudarisov2024} (presented at the ACM International Conference
+on AI in Finance, ICAIF) examine related questions at the intersection of
+machine learning and financial market analysis. These works provide
+encouraging evidence that sentiment-derived features are not redundant
+with purely price-based features, but they typically focus on
+\emph{supervised} prediction tasks (e.g., forecasting returns or
+volatility) rather than on \emph{unsupervised} regime identification, and
+rarely provide a systematic \emph{economic} validation of the resulting
+groups broken down by sector.
+
+Based on this review, three gaps can be identified that this thesis aims
+to address:
+
+\begin{enumerate}
+  \item \textbf{Lack of systematic comparison between technical-only and
+  technical+sentiment clustering for regime detection.} While sentiment
+  indices have been related to market \emph{returns} in a predictive
+  (supervised) sense, there is limited work directly comparing
+  \textit{unsupervised} regime partitions obtained with and without
+  sentiment features, using a controlled experimental design (same
+  algorithm, same $K$, same evaluation protocol).
+  \item \textbf{Limited sector-level economic validation of detected
+  regimes.} Much of the regime-detection literature evaluates models using
+  aggregate market-level statistics (e.g., the overall index return and
+  volatility per regime). This thesis instead constructs
+  equally-weighted sector-level return series for all 11 GICS sectors and
+  evaluates each detected regime's economic profile \emph{per sector},
+  providing a much more granular picture of what each regime represents
+  economically.
+  \item \textbf{Lack of direct comparison between K-Means and HMM on the
+  same sentiment-augmented feature sets.} Although both \textit{K-Means}
+  and HMMs have been applied separately to regime detection, this thesis
+  provides a direct, like-for-like comparison of the two methods on
+  identical feature sets, with a particular focus on the trade-off between
+  the temporal smoothness imposed by the HMM's transition dynamics and the
+  sharper, more economically differentiated partitions obtained by
+  \textit{K-Means}.
+\end{enumerate}
+
+\Cref{ch:methodology} describes in detail how these gaps are addressed
+through the design of the data pipeline, the three \textit{K-Means}
+models (A, B and C), the Gaussian HMM comparison, and the sector-level
+economic validation framework.

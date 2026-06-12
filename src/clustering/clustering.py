@@ -4,7 +4,6 @@ from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from hmmlearn.hmm import GaussianHMM
 import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings("ignore")
@@ -24,9 +23,14 @@ FEATURES_TECH = [
 ]
 
 def get_sentiment_cols(df):
-    return [c for c in df.columns if c.startswith("sentiment_avg_") or c.startswith("sentiment_std_")]
+    return [c for c in df.columns
+            if (c.startswith("sentiment_avg_") or c.startswith("sentiment_std_"))
+            and not c.endswith("_smooth")]
 
-def run_kmeans(X_scaled, df, label_prefix, n_clusters=N_CLUSTERS):
+def get_smooth_cols(df):
+    return [c for c in df.columns if c.startswith("sentiment_avg_") and c.endswith("_smooth")]
+
+def run_kmeans(X_scaled, df, label_prefix, profile_cols, n_clusters=N_CLUSTERS):
     print(f"\n--- K-Means ({label_prefix}) ---")
 
     inertias, silhouettes = [], []
@@ -56,73 +60,34 @@ def run_kmeans(X_scaled, df, label_prefix, n_clusters=N_CLUSTERS):
     print(f"Silhouette score (k={n_clusters}): {sil:.4f}")
     print("Distribución de clusters:")
     print(pd.Series(labels).value_counts().sort_index())
-    print("\nPerfil de clusters (medias de indicadores técnicos):")
+    print("\nPerfil de clusters (medias de features del modelo):")
     profile = df.copy()
     profile[f"kmeans_{label_prefix}"] = labels
-    print(profile.groupby(f"kmeans_{label_prefix}")[FEATURES_TECH].mean().round(4))
+    cols_to_show = [c for c in profile_cols if c in profile.columns]
+    print(profile.groupby(f"kmeans_{label_prefix}")[cols_to_show].mean().round(4))
     return sil, labels
 
-def run_hmm(df_daily, features, label_prefix, n_clusters=N_CLUSTERS):
-    print(f"\n--- HMM ({label_prefix}) ---")
-
-    df_hmm = df_daily[["date"] + features].copy().sort_values("date").reset_index(drop=True)
-
-    scaler = StandardScaler()
-    X_hmm = scaler.fit_transform(df_hmm[features].values)
-
-    hmm = GaussianHMM(
-        n_components=n_clusters,
-        covariance_type="full",
-        n_iter=1000,
-        random_state=42,
-        min_covar=1e-3
-    )
-    hmm.fit(X_hmm)
-    df_hmm[f"hmm_{label_prefix}"] = hmm.predict(X_hmm)
-
-    print("Distribución de estados HMM:")
-    print(df_hmm[f"hmm_{label_prefix}"].value_counts().sort_index())
-    print(f"\nPerfil de estados HMM (medias de features del modelo):")
-    print(df_hmm.groupby(f"hmm_{label_prefix}")[FEATURES_TECH].mean().round(4))
-
-    colors = ["tab:blue", "tab:orange", "tab:red"]
-    plt.figure(figsize=(14, 4))
-    for state in range(n_clusters):
-        mask = df_hmm[f"hmm_{label_prefix}"] == state
-        plt.scatter(
-            df_hmm.loc[mask, "date"],
-            df_hmm.loc[mask, "vol30d_sp500"],
-            label=f"Estado {state}",
-            s=10, alpha=0.6,
-            color=colors[state]
-        )
-    plt.title(f"Estados HMM a lo largo del tiempo — {label_prefix}")
-    plt.xlabel("Fecha")
-    plt.ylabel("Volatilidad 30d")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(OUT_DIR / f"hmm_states_time_{label_prefix}.png", dpi=200)
-    plt.close()
-
-    return df_hmm[["date", f"hmm_{label_prefix}"]]
 
 def main():
     print(f"{'[DEBUG MODE]' if DEBUG_MODE else '[FULL MODE]'}")
     print("Cargando dataset...")
     df = pd.read_parquet(IN_PATH)
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
-    df = df.dropna(subset=FEATURES_TECH).reset_index(drop=True)
+    df = df.dropna(subset=FEATURES_TECH).sort_values("date").reset_index(drop=True)
     print(f"Filas para clustering: {len(df):,}")
     print(f"Columnas: {len(df.columns)}")
 
     sentiment_cols = get_sentiment_cols(df)
-    FEATURES_ALL = FEATURES_TECH + sentiment_cols
+    smooth_cols    = get_smooth_cols(df)
+    FEATURES_ALL   = FEATURES_TECH + sentiment_cols
+
+    print(f"Features técnicos: {len(FEATURES_TECH)}")
+    print(f"Features sentimiento crudas: {len(sentiment_cols)}")
+    print(f"Features sentimiento suavizado: {len(smooth_cols)}")
 
     rows_per_date = df.groupby("date").size()
     print(f"\nFilas por fecha — media: {rows_per_date.mean():.2f}, max: {rows_per_date.max()}")
-
-    df_daily = df.drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
-    print(f"Días únicos para HMM: {len(df_daily):,}")
+    print(f"Días únicos: {df['date'].nunique():,}")
 
     # ============================
     # MODELO A — Solo técnicos
@@ -132,19 +97,33 @@ def main():
     print("="*50)
     scaler_A = StandardScaler()
     X_A = scaler_A.fit_transform(df[FEATURES_TECH].values)
-    sil_A, labels_A = run_kmeans(X_A, df, label_prefix="tech")
-    hmm_A = run_hmm(df_daily, features=FEATURES_TECH, label_prefix="tech")
+    sil_A, labels_A = run_kmeans(X_A, df, label_prefix="tech", profile_cols=FEATURES_TECH)
 
     # ============================
-    # MODELO B — Técnicos + sentimiento
+    # MODELO B — Técnicos + sentimiento crudo
     # ============================
     print("\n" + "="*50)
     print("MODELO B — Indicadores técnicos + sentimiento sectorial")
     print("="*50)
+    print(f"Features: {len(FEATURES_TECH)} técnicos + {len(sentiment_cols)} sentimiento = {len(FEATURES_ALL)} total")
     scaler_B = StandardScaler()
     X_B = scaler_B.fit_transform(df[FEATURES_ALL].values)
-    sil_B, labels_B = run_kmeans(X_B, df, label_prefix="tech_sent")
-    hmm_B = run_hmm(df_daily, features=FEATURES_ALL, label_prefix="tech_sent")
+    sil_B, labels_B = run_kmeans(X_B, df, label_prefix="tech_sent", profile_cols=FEATURES_TECH)
+
+    # ============================
+    # MODELO C — Solo sentimiento suavizado (MA21)
+    # ============================
+    print("\n" + "="*50)
+    print("MODELO C — Solo sentimiento suavizado (MA21)")
+    print("="*50)
+    if smooth_cols:
+        print(f"Features: {len(smooth_cols)} columnas sentimiento suavizado")
+        scaler_C = StandardScaler()
+        X_C = scaler_C.fit_transform(df[smooth_cols].values)
+        sil_C, labels_C = run_kmeans(X_C, df, label_prefix="sent_smooth", profile_cols=smooth_cols)
+    else:
+        print("  [SKIP] No hay columnas de sentimiento suavizado.")
+        sil_C, labels_C = None, None
 
     # ============================
     # COMPARATIVA
@@ -154,15 +133,17 @@ def main():
     print("="*50)
     print(f"Silhouette K-Means Modelo A (solo técnicos):          {sil_A:.4f}")
     print(f"Silhouette K-Means Modelo B (técnicos + sentimiento): {sil_B:.4f}")
+    if sil_C is not None:
+        print(f"Silhouette K-Means Modelo C (solo sentimiento MA21):  {sil_C:.4f}")
     print(f"Mejora al añadir sentimiento: {sil_B - sil_A:+.4f}")
 
     # ============================
     # GUARDAR
     # ============================
-    df["kmeans_tech"] = labels_A
+    df["kmeans_tech"]      = labels_A
     df["kmeans_tech_sent"] = labels_B
-    df = df.merge(hmm_A, on="date", how="left")
-    df = df.merge(hmm_B, on="date", how="left")
+    if labels_C is not None:
+        df["kmeans_sent_smooth"] = labels_C
 
     df.to_parquet(OUT_DIR / "clustered_data.parquet", index=False)
     print(f"\n✅ Guardado en: {OUT_DIR / 'clustered_data.parquet'}")

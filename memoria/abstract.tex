@@ -1,0 +1,189 @@
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+\markboth{Abstract}{Abstract}
+
+Financial markets do not behave homogeneously over time. Instead, they
+alternate between periods of sustained growth, prolonged downturns, and
+episodes of extreme instability in which volatility spikes and
+cross-asset correlations break down. These ``market regimes'' ---
+informally described as \emph{bull}, \emph{bear} and \emph{crisis}
+markets --- have a direct impact on risk management, asset allocation
+and investment decision-making. Identifying, in an objective and
+automated manner, which regime the market is currently in is therefore a
+problem of substantial academic and practical interest.
+
+Traditional approaches to this problem rely mainly on price-based and
+technical variables --- returns, volatility, moving averages, momentum
+--- combined with statistical methods such as regime-switching models or
+unsupervised learning techniques like \textit{K-Means}. However, these
+variables are, by construction, \emph{backward-looking}: they reflect
+price movements that have already occurred. At the same time, the rise of
+\textit{Transformer}-based language models, and in particular of
+finance-specific models such as \textit{FinBERT}, has made it possible to
+systematically extract the emotional tone --- positive, negative or
+neutral --- of large volumes of financial news, providing a
+\emph{contemporaneous} source of information that is potentially
+complementary to classical technical indicators.
+
+This Bachelor's Thesis designs and implements a complete end-to-end
+pipeline that combines both sources of information --- price/technical
+indicators and sentiment extracted from financial news --- with the goal
+of identifying market regimes through unsupervised clustering techniques,
+and of rigorously assessing whether incorporating sentiment improves the
+quality and economic interpretability of the resulting regimes compared
+to a purely technical approach.
+
+\section*{Objectives}
+
+The overall objective of this project is to \textbf{develop and validate
+a clustering-based market regime detection methodology, comparing a model
+that relies exclusively on S\&P 500 technical indicators against models
+that additionally incorporate sector-level sentiment extracted from
+financial news using FinBERT}. This overall objective is broken down into
+the following specific objectives:
+
+\begin{itemize}
+  \item Build a unified dataset combining daily technical indicators for
+  the S\&P 500 index with a sector-level (GICS) sentiment indicator
+  derived from the \textit{FNSPID} financial news corpus.
+  \item Design and implement a reproducible sentiment-scoring procedure
+  based on the \textit{FinBERT} model, together with a sector-level
+  aggregation and temporal smoothing scheme.
+  \item Build three alternative \textit{K-Means} clustering models ---
+  technical-only, technical+sentiment and smoothed-sentiment-only --- and
+  compare them using internal validation metrics (silhouette coefficient,
+  principal component analysis) and feature-importance analysis.
+  \item Incorporate a \textit{Hidden Markov Model} (HMM) as a secondary
+  comparison method, evaluating its differences with respect to
+  \textit{K-Means} in terms of temporal stability and economic
+  differentiation of the regimes.
+  \item Economically validate the obtained regimes by computing
+  annualized return, volatility, Sharpe ratio, drawdown and other
+  metrics, broken down by GICS sector and by regime.
+\end{itemize}
+
+\section*{Methodology}
+
+The developed pipeline, schematically represented in
+\autoref{fig:abstract-pipeline}, consists of the following main stages:
+
+\begin{enumerate}
+  \item \textbf{Data acquisition and filtering}: the starting point is
+  the public \textit{FNSPID} (Financial News and Stock Price Integration
+  Dataset) corpus, which contains financial news headlines associated
+  with US-market tickers. News items are filtered to retain only those
+  associated with companies that were constituents of the S\&P 500 at the
+  time of publication, and are reassigned to the next open market day to
+  avoid look-ahead bias.
+  \item \textbf{Sentiment scoring with FinBERT}: each headline is
+  processed with the \textit{ProsusAI/FinBERT} model, yielding
+  probabilities $p_{\text{pos}}$, $p_{\text{neg}}$ and $p_{\text{neu}}$. A
+  continuous sentiment score $s = p_{\text{pos}} - p_{\text{neg}} \in
+  [-1,1]$ is defined, together with a categorical label
+  (positive/negative/neutral) obtained as the argmax of the three
+  probabilities.
+  \item \textbf{Sector-level aggregation}: each ticker is mapped to its
+  corresponding GICS sector (11 sectors), and for each (date, sector)
+  combination the mean and standard deviation of sentiment across all
+  published news items are computed. Given the noisy nature of the daily
+  signal, a 21-session moving average (\textit{MA21}) is additionally
+  applied, which substantially reduces high-frequency noise while
+  preserving medium-term trends in sector sentiment.
+  \item \textbf{Technical indicators}: nine technical indicators are
+  computed from daily S\&P 500 prices --- RSI, 50- and 200-session moving
+  average ratios, 21- and 126-session momentum, 30- and 252-session
+  realized volatility, and 30- and 252-session return skewness.
+  \item \textbf{Clustering dataset construction}: technical indicators and
+  sector-level sentiment variables (raw and smoothed) are merged into a
+  single daily dataset, resulting in 1,132 observations spanning May 2009
+  to February 2024.
+  \item \textbf{K-Means clustering}: three models are trained ---
+  \textbf{Model A} (technical indicators only), \textbf{Model B}
+  (technical indicators + raw sector sentiment) and \textbf{Model C}
+  (smoothed sector sentiment only) --- with $K=3$, selected via the elbow
+  method and the silhouette coefficient. In addition, a \textbf{Gaussian
+  HMM} (full covariance, $K=3$ states) is trained on the same feature sets
+  as a comparison method.
+  \item \textbf{Regime labeling and interpretation}: the resulting
+  clusters are labeled as \emph{Bull}, \emph{Bear} or \emph{Crisis} based
+  on centroid analysis (mean momentum, volatility and RSI of each
+  cluster).
+  \item \textbf{Economic validation}: for each combination of GICS sector
+  and regime, annualized return, annualized volatility, Sharpe ratio
+  ($r_f=2\%$), maximum drawdown, percentage of positive days and extreme
+  daily returns (best and worst day) are computed.
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  % TODO: insert full pipeline diagram (block diagram)
+  \fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}
+  Block diagram of the complete pipeline: FNSPID
+  $\rightarrow$ S\&P 500 filtering $\rightarrow$ FinBERT $\rightarrow$
+  GICS sector aggregation (mean/std + MA21) $\rightarrow$ S\&P 500
+  technical indicators $\rightarrow$ clustering dataset $\rightarrow$
+  K-Means (Models A/B/C) and HMM $\rightarrow$ economic validation by
+  sector and regime.\vspace{3cm}}}
+  \caption{General overview of the pipeline developed in this project.}
+  \label{fig:abstract-pipeline}
+\end{figure}
+
+\section*{Main results}
+
+Silhouette analysis in a common principal-component space (retaining 80\%
+of explained variance) shows that \textbf{Model A (technical)} achieves
+the best internal cohesion (silhouette $\approx 0.193$), followed by
+\textbf{Model B (technical + sentiment)} ($\approx 0.178$) and
+\textbf{Model C (smoothed sentiment only)} ($\approx 0.162$). This
+indicates that technical variables remain the strongest structural
+discriminators of the data, and that sentiment alone is not sufficient to
+define well-separated clusters.
+
+However, \textbf{economic validation} reveals a more nuanced picture.
+Model B, which incorporates sector sentiment alongside technical
+indicators, produces regimes with \emph{sharper} economic differentiation
+than Model A: the \emph{Bear} regime of Model B exhibits negative Sharpe
+ratios across virtually all sectors (e.g., $-0.36$ for \textit{Financial
+Services} and $-0.26$ for \textit{Energy}), while the \emph{Crisis} regime
+counter-intuitively concentrates the highest annualized returns (up to
+$+91.9\%$ for \textit{Real Estate}), reflecting high-volatility episodes
+with strong rebounds. The \textit{Energy} sector in the \emph{Bear} regime
+exhibits the most severe maximum drawdown of the entire analysis
+($-74.9\%$), as well as the best and worst single-day returns of the whole
+sample ($+16.9\%$ and $-24.7\%$, respectively), highlighting the extremely
+volatile nature of this regime.
+
+\textbf{Model C}, based exclusively on smoothed sentiment, produces
+centroids that are nearly indistinguishable in technical variables (e.g.,
+the 50-session moving-average ratio ranges from 1.0086 to 1.0134 across
+regimes), constituting a \emph{meaningful negative result}: aggregated
+sentiment alone, without price information, fails to capture market
+regime dynamics with the same sharpness as technical indicators.
+
+The comparison with the \textbf{HMM} model shows that, while both methods
+identify qualitatively similar regimes, \textit{K-Means} produces a
+\emph{much sharper} economic differentiation between regimes (Sharpe
+ratios ranging approximately from $-3.1$ to $+3.8$), whereas the HMM
+generates states with much milder Sharpe ratios (roughly between $-0.6$
+and $+1.5$), consistent with its nature as a generative model with smooth
+transitions between states.
+
+\section*{Conclusions}
+
+The results obtained confirm that technical indicators provide the
+strongest foundation for clustering-based market regime detection, but
+that incorporating sector-level sentiment extracted via FinBERT
+\textbf{adds incremental value in terms of the economic differentiation}
+of the resulting regimes, particularly for distinguishing sustained
+\emph{bear-market} episodes from high-volatility \emph{crisis} episodes
+with sharp rebounds. These findings open avenues for future work focused
+on the dynamic combination of both information sources, the extension of
+the analysis to other indices and markets, and the exploration of
+sequential deep-learning architectures for regime detection.
+
+\vspace{1cm}
+\noindent\textbf{Keywords:} market regimes, clustering, K-Means, Hidden
+Markov Model, sentiment analysis, FinBERT, financial news, FNSPID, S\&P
+500, economic validation.
+
+\clearpage

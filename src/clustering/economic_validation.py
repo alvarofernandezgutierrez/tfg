@@ -15,7 +15,15 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 RISK_FREE_RATE = 0.02
 TRADING_DAYS = 252
 
-CLUSTER_COLS = ["kmeans_tech", "kmeans_tech_sent", "hmm_tech", "hmm_tech_sent"]
+# FIX 1: incluidos los modelos C (kmeans_sent_smooth, hmm_sent_smooth)
+CLUSTER_COLS = [
+    "kmeans_tech",
+    "kmeans_tech_sent",
+    "kmeans_sent_smooth",
+    "hmm_tech",
+    "hmm_tech_sent",
+    "hmm_sent_smooth",
+]
 
 def sharpe_ratio(returns, rf=RISK_FREE_RATE):
     """Ratio de Sharpe anualizado usando retorno medio diario."""
@@ -39,7 +47,11 @@ def validate_clusters(df, cluster_col, returns_col="ret"):
             "volatilidad_anualizada": round(rets.std() * np.sqrt(TRADING_DAYS), 4),
             "sharpe": round(sharpe_ratio(rets), 4),
             "pct_dias_positivos": round((rets > 0).mean() * 100, 2),
-            "max_drawdown": round((rets.cumsum() - rets.cumsum().cummax()).min(), 4),
+            # FIX 3: max_drawdown reemplazado por peor retorno diario individual.
+            # El drawdown acumulado no tiene sentido económico cuando los días
+            # del cluster no son consecutivos en el tiempo.
+            "peor_dia_pct": round(rets.min() * 100, 4),
+            "mejor_dia_pct": round(rets.max() * 100, 4),
         })
     return pd.DataFrame(results).set_index("cluster")
 
@@ -110,8 +122,10 @@ def main():
         print(f"  Diferenciación (max-min):  {metrics['sharpe'].max() - metrics['sharpe'].min():.4f}")
 
     # ---- 4. Validación por sector ----
+    # FIX 2: parametrizado para poder validar por sector en cualquier modelo,
+    # no solo kmeans_tech_sent
     print("\n" + "="*60)
-    print("VALIDACIÓN POR SECTOR (kmeans_tech_sent)")
+    print("VALIDACIÓN POR SECTOR")
     print("="*60)
 
     sent = pd.read_parquet(SENTIMENT_PATH)
@@ -121,23 +135,27 @@ def main():
     gics = pd.read_csv(GICS_PATH)
     gics["ticker"] = gics["ticker"].astype(str).str.strip().str.upper()
     sent = sent.merge(gics[["ticker", "sector"]], on="ticker", how="inner")
-
-    cluster_dates = df[["date", "kmeans_tech_sent"]].dropna()
-    sent = sent.merge(cluster_dates, on="date", how="inner")
     sent = sent.merge(mkt[["date", "ret"]], on="date", how="left")
 
-    sector_stats = (
-        sent.groupby(["kmeans_tech_sent", "sector"])
-        .agg(
-            sentiment_avg=("sentiment_score", "mean"),
-            n_noticias=("sentiment_score", "count"),
-            ret_medio_diario_pct=("ret", lambda x: round(x.mean() * 100, 4))
-        )
-        .reset_index()
-    )
+    sector_cluster_cols = [c for c in CLUSTER_COLS if c in df.columns]
+    cluster_dates = df[["date"] + sector_cluster_cols].dropna(subset=sector_cluster_cols, how="all")
+    sent = sent.merge(cluster_dates, on="date", how="inner")
 
-    print(sector_stats.to_string())
-    sector_stats.to_csv(OUT_DIR / f"sector_by_cluster.csv", index=False)
+    for cluster_col in sector_cluster_cols:
+        if cluster_col not in sent.columns:
+            continue
+        print(f"\n--- Sector stats por {cluster_col} ---")
+        sector_stats = (
+            sent.groupby([cluster_col, "sector"])
+            .agg(
+                sentiment_avg=("sentiment_score", "mean"),
+                n_noticias=("sentiment_score", "count"),
+                ret_medio_diario_pct=("ret", lambda x: round(x.mean() * 100, 4))
+            )
+            .reset_index()
+        )
+        print(sector_stats.to_string())
+        sector_stats.to_csv(OUT_DIR / f"sector_by_{cluster_col}.csv", index=False)
 
     # ---- 5. Gráfico comparativa Sharpe todos los modelos ----
     if len(all_results) >= 2:

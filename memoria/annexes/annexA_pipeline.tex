@@ -1,0 +1,278 @@
+\chapter{Pipeline Source Code Structure}
+\label{annex:pipeline}
+
+This annex describes the organization of the source code repository
+implementing the data pipeline described in \Cref{ch:methodology}. All
+code is written in Python, using \texttt{pandas} and \texttt{numpy} for
+data manipulation, \texttt{yfinance} for market data retrieval,
+\texttt{Hugging Face transformers} and \texttt{torch} for FinBERT
+inference, and \texttt{scikit-learn} / \texttt{hmmlearn} for clustering.
+The repository is organized into four top-level packages under
+\texttt{src/}, corresponding to the four major stages of the pipeline:
+\texttt{news}, \texttt{market}, \texttt{sentiment} and \texttt{clustering},
+plus an \texttt{eda} package containing exploratory analyses that informed
+several methodological decisions (e.g., the choice of the MA21 smoothing
+window in \Cref{sec:meth-smoothing}).
+
+\section{Repository Structure}
+\label{annex:pipeline-structure}
+
+\begin{verbatim}
+src/
+├── news/
+│   └── load_fnspid.py            Stream and cache the raw FNSPID corpus
+├── market/
+│   ├── download_sp500.py         Download S&P 500 OHLC prices (yfinance)
+│   ├── sp500_historical.py        Historical S&P 500 constituents lookup
+│   └── technical_indicators.py    Compute the 9 technical indicators
+├── sentiment/
+│   ├── sentiment_finbert.py       FinBERT batched sentiment scoring
+│   ├── aggregate_sentiment.py     (date, ticker)-level aggregation
+│   ├── aggregate_by_sector.py     (date, sector)-level aggregation + MA21
+│   ├── cross_market_sentiment.py  Merge sentiment with market returns
+│   └── build_clustering_dataset.py  Final clustering dataset assembly
+├── eda/
+│   ├── eda_gics_mapping.py         Build ticker -> GICS sector mapping
+│   ├── eda_filter_sp500_news.py    Filter FNSPID news by S&P 500 membership
+│   ├── eda_ticker_quality.py       Per-ticker news coverage diagnostics
+│   ├── eda_news.py                 News volume / distribution analyses
+│   ├── eda_market.py               Market data quality checks
+│   ├── eda_news_vs_market.py       News vs. market exploratory analysis
+│   ├── eda_fnspid_full_stream_analysis.py  Full-corpus FNSPID statistics
+│   └── eda_sentiment_smoothing.py  MA5/MA10/MA21 noise-reduction analysis
+└── clustering/
+    ├── clustering.py               K-Means Models A/B/C + Gaussian HMM
+    ├── silhouette_pca.py           PCA-common-space silhouette comparison
+    ├── feature_importance.py       ANOVA F-statistic feature importance
+    ├── plot_clusters.py             PCA, correlation and regime plots
+    ├── economic_validation.py       Market-level economic metrics
+    └── sector_regime_analysis.py    Sector-level economic metrics & heatmaps
+\end{verbatim}
+
+Each module follows the same general convention: input and output paths
+are defined as module-level constants (typically under \texttt{data/raw/},
+\texttt{data/processed/} or \texttt{outputs/}), and a \texttt{main()}
+function executes the corresponding processing step, printing progress
+information (row counts, date ranges, intermediate statistics) to allow
+each stage to be run and verified independently. The following sections
+describe each stage in more detail.
+
+\section{Data Acquisition}
+\label{annex:pipeline-acquisition}
+
+\textbf{\texttt{news/load\_fnspid.py}} streams the FNSPID dataset
+(\texttt{Zihan1004/FNSPID} on the Hugging Face Hub, corresponding to
+\cite{zhang2023fnspid}) using the \texttt{datasets} library in streaming
+mode, and writes the relevant columns (publication date, headline title,
+stock ticker, publisher and URL) to a local CSV cache under
+\texttt{data/raw/news/}. Streaming mode is used because the full corpus
+contains several million rows and does not fit comfortably in memory.
+
+\textbf{\texttt{market/download\_sp500.py}} downloads daily OHLC
+(open/high/low/close/volume) data for the S\&P 500 index from Yahoo
+Finance via \texttt{yfinance}, with a retry mechanism (up to 3 attempts per
+ticker) to handle transient network failures, and caches the result under
+\texttt{data/raw/market/}.
+
+\textbf{\texttt{market/sp500\_historical.py}} provides a lookup function,
+\texttt{sp500\_tickers\_on(date)}, which, given a \texttt{data/raw/market/sp500\_historical\_components.csv}
+file containing the historical list of S\&P 500 constituents at successive
+dates, returns the list of tickers that were constituents of the index on
+(or most recently before) a given date. This function underpins the
+membership-filtering step described in \Cref{sec:meth-sp500}.
+
+\section{News Filtering and GICS Sector Mapping}
+\label{annex:pipeline-filtering}
+
+\textbf{\texttt{eda/eda\_gics\_mapping.py}} constructs a
+ticker-to-GICS-sector mapping (\texttt{data/raw/market/ticker\_gics\_mapping.csv})
+by combining a base table of known sectors with sector information
+retrieved from Yahoo Finance for any remaining tickers, and normalizes
+Yahoo Finance's sector names to the standard GICS sector names used
+throughout this thesis (e.g., \texttt{"Healthcare"} $\to$ \texttt{"Health
+Care"}, \texttt{"Financials"} $\to$ \texttt{"Financial Services"},
+\texttt{"Consumer Cyclical"} $\to$ \texttt{"Consumer Discretionary"},
+\texttt{"Consumer Defensive"} $\to$ \texttt{"Consumer Staples"},
+\texttt{"Basic Materials"} $\to$ \texttt{"Materials"}, \texttt{"Technology"}
+$\to$ \texttt{"Information Technology"}), producing the 11-sector
+distribution summarized in \Cref{tab:gics-distribution}.
+
+\textbf{\texttt{eda/eda\_filter\_sp500\_news.py}} implements the
+membership-filtering step of \Cref{sec:meth-filtering}: it expands the
+historical S\&P 500 constituents table into a long (date, ticker) table,
+and retains only those FNSPID news rows whose (date, ticker) pair appears
+in this table --- i.e., news items associated with a company that was an
+S\&P 500 constituent on the date the news was published. The filtered
+result is written to \texttt{data/processed/news/fnspid\_sp500.parquet}.
+
+\section{FinBERT Sentiment Scoring}
+\label{annex:pipeline-finbert}
+
+\textbf{\texttt{sentiment/sentiment\_finbert.py}} implements the sentiment
+scoring procedure of \Cref{sec:meth-finbert}. After loading the filtered
+news parquet, normalizing column names (\texttt{date}, \texttt{ticker},
+\texttt{title}) and dropping unused summary columns, the script loads the
+\texttt{ProsusAI/finbert} model via the \texttt{transformers.pipeline} API
+(using GPU acceleration when available, \texttt{torch.cuda.is\_available()}),
+and processes all headlines in batches of \texttt{BATCH\_SIZE = 64}. Each
+headline is truncated to 512 characters before tokenization (FinBERT's
+maximum input length). For each headline, the pipeline returns class
+probabilities $p_{\text{pos}}, p_{\text{neg}}, p_{\text{neu}}$, from which
+the continuous sentiment score $s = p_{\text{pos}} - p_{\text{neg}}$
+(\Cref{eq:sentiment-score}) and the categorical label
+(\Cref{eq:sentiment-label}) are derived. The module also supports a
+\texttt{DEBUG\_MODE} flag that restricts processing to a random subset of
+50,000 headlines (\texttt{random\_state=42}) for fast iteration during
+development; all results reported in this thesis use the full corpus
+(\texttt{DEBUG\_MODE = False}).
+
+\section{Sector-Level Aggregation and Smoothing}
+\label{annex:pipeline-aggregation}
+
+\textbf{\texttt{sentiment/aggregate\_sentiment.py}} performs an
+intermediate (date, ticker)-level aggregation, computing, for each
+ticker and day, the mean and standard deviation of the sentiment score
+across all headlines published that day (\texttt{sentiment\_score\_mean},
+\texttt{sentiment\_score\_std}), the total number of news items, and the
+counts of positive/negative/neutral headlines.
+
+\textbf{\texttt{sentiment/aggregate\_by\_sector.py}} performs the
+sector-level aggregation described in \Cref{sec:meth-aggregation}: it
+merges the per-ticker sentiment scores with the GICS sector mapping
+(an inner join on \texttt{ticker}), groups by \texttt{(date, sector)}, and
+computes \texttt{sentiment\_avg} (mean) and \texttt{sentiment\_std}
+(standard deviation, \Cref{eq:sector-mean,eq:sector-std}) of the sentiment
+score across all news items published about companies in that sector on
+that day. Standard deviations for (date, sector) cells with a single news
+item (undefined sample standard deviation) are filled with zero. The
+resulting long table is then pivoted into a wide format with one column
+per (statistic, sector) combination, and a rolling mean with
+\texttt{SMOOTH\_WINDOW = 21} sessions (\Cref{eq:ma-smooth}) is applied to
+each \texttt{sentiment\_avg} column to produce the corresponding
+\texttt{\_smooth} columns used by Model C.
+
+\textbf{\texttt{sentiment/cross\_market\_sentiment.py}} is an exploratory
+module that merges the aggregated per-ticker sentiment series with daily
+S\&P 500 returns and rolling volatility, used during the EDA phase to
+visualize the relationship between sentiment and market dynamics
+(\Cref{sec:soa-gap}); it is not part of the critical path that produces the
+final clustering dataset.
+
+\section{Technical Indicators}
+\label{annex:pipeline-technical}
+
+\textbf{\texttt{market/technical\_indicators.py}} computes the 9 technical
+indicators of \Cref{sec:meth-technical} from the daily S\&P 500 OHLC
+series. Log returns are computed as
+$r_t = \ln(\text{close}_t / \text{close}_{t-1})$. The Relative Strength
+Index is computed via \texttt{compute\_rsi()}, using exponentially-weighted
+moving averages of gains and losses with a center-of-mass parameter
+\texttt{com = window - 1} for a 14-session window
+(\Cref{eq:rsi}). The 50- and 200-session moving-average ratios
+(\texttt{MA50\_ratio}, \texttt{MA200\_ratio}, \Cref{eq:ma-ratio}), the
+21- and 126-session momentum measures (\texttt{mom21}, \texttt{mom126},
+\Cref{eq:momentum}), and the 30- and 252-session annualized realized
+volatilities (\texttt{vol\_30d}, \texttt{vol\_252d}, scaled by
+$\sqrt{252}$, \Cref{eq:realized-vol}) and rolling skewness measures
+(\texttt{skew\_30d}, \texttt{skew\_252d}, \Cref{eq:skewness}) are computed
+using \texttt{pandas} rolling-window operations on the log-return series.
+
+\section{Clustering Dataset Construction}
+\label{annex:pipeline-dataset}
+
+\textbf{\texttt{sentiment/build\_clustering\_dataset.py}} performs the
+final assembly step of \Cref{sec:meth-dataset}. It loads the sector-level
+sentiment table and the technical indicator table, renames the technical
+columns with the \texttt{\_sp500} suffix (e.g., \texttt{RSI} $\to$
+\texttt{RSI\_sp500}), drops auxiliary columns (\texttt{ret}, \texttt{close})
+that are not used as clustering features, and performs an inner merge on
+\texttt{date}. A date cutoff (\texttt{DATE\_CUTOFF}) is applied to exclude
+incomplete trailing observations, and rows with missing values --- arising
+from the warm-up periods required by the longest rolling windows
+(252 sessions for \texttt{vol252d\_sp500} and \texttt{skew252d\_sp500}) ---
+are dropped, yielding the final 1{,}132-observation, 46-column dataset
+written to \texttt{data/processed/clustering\_dataset.parquet}.
+
+\section{Clustering, Internal Validation and Economic Validation}
+\label{annex:pipeline-clustering}
+
+\textbf{\texttt{clustering/clustering.py}} is the central module of the
+clustering stage. It defines the three feature sets \texttt{FEATURES\_TECH}
+(9 technical features, Model A), \texttt{FEATURES\_ALL} (\texttt{FEATURES\_TECH}
+plus the 22 raw sentiment columns, Model B) and the 11 MA21-smoothed
+sentiment columns (Model C), standardizes each feature set with
+\texttt{StandardScaler}, and fits \texttt{sklearn.cluster.KMeans} with
+$K=3$ for each of the three configurations (\Cref{eq:soa-kmeans-objective}),
+storing the resulting labels as \texttt{kmeans\_tech}, \texttt{kmeans\_tech\_sent}
+and \texttt{kmeans\_sent\_smooth} columns in
+\texttt{outputs/clustering/clustered\_data.parquet}. The same module also
+implements \texttt{run\_hmm()}, which fits
+\texttt{hmmlearn.hmm.GaussianHMM(n\_components=3, covariance\_type="full",
+n\_iter=1000, random\_state=42, min\_covar=1e-3)} on the standardized
+\texttt{FEATURES\_TECH} and \texttt{FEATURES\_ALL} feature sets, producing
+the \texttt{hmm\_tech} and \texttt{hmm\_tech\_sent} state assignments via
+\texttt{model.predict()}, and saves a diagnostic plot of 30-day realized
+volatility colored by HMM state
+(\Cref{fig:hmm-states-modelA,fig:hmm-states-modelB}).
+
+\textbf{\texttt{clustering/silhouette\_pca.py}} implements the
+common-PCA-space silhouette comparison of
+\Cref{sec:results-silhouette}: it standardizes the union of the 9 technical
+and 11 smoothed sentiment features (20 features), fits a PCA retaining
+components up to 80\% explained variance (9 components, 82.0\% actual
+variance), projects each of the three K-Means partitions into this common
+space, and computes the silhouette coefficient
+(\Cref{eq:soa-silhouette}) of each partition in the projected space, saving
+\texttt{fig\_silhouette\_pca\_comparison.png} and \texttt{fig\_silhouette\_scree.png}.
+
+\textbf{\texttt{clustering/feature\_importance.py}} computes, for the
+Model B partition (\texttt{kmeans\_tech\_sent}), the ANOVA F-statistic of
+each of the 31 input features with respect to the 3-cluster grouping
+using \texttt{sklearn.feature\_selection.f\_classif}, ranks the features by
+F-statistic, and saves the results to
+\texttt{outputs/clustering/validation/feature\_importance.csv} and
+\texttt{fig\_feature\_importance.png} (\Cref{tab:feature-importance,fig:feature-importance}).
+
+\textbf{\texttt{clustering/plot\_clusters.py}} centralizes the visual
+diagnostics shared across models: it defines the
+\texttt{CLUSTER\_COLORS} mapping ($\{0:\texttt{\#0D7A3E}$ (Bull, green),
+$1:\texttt{\#C0392B}$ (Bear, red), $2:\texttt{\#E67E22}$ (Crisis, orange)$\}$)
+and \texttt{CLUSTER\_NAMES} mapping used consistently across all figures in
+this thesis, and implements \texttt{plot\_pca\_clusters()} (PCA scatter +
+loadings + scree plot, \Cref{fig:pca-modelA,fig:pca-modelB}),
+\texttt{plot\_sp500\_regimes()} (S\&P 500 price series with regime-shaded
+background, \Cref{fig:sp500-regimes-modelA,fig:sp500-regimes-modelB}) and
+\texttt{plot\_correlation\_matrix()} (feature correlation heatmaps,
+\Cref{fig:correlation-modelA,fig:correlation-modelB}).
+
+\textbf{\texttt{clustering/economic\_validation.py}} implements the
+market-level economic validation framework of \Cref{sec:meth-validation}:
+for each clustering configuration (Models A, B, C and both HMM variants)
+and each regime/state label, it computes the mean daily return, the
+annualized return (\Cref{eq:ann-return}), the annualized volatility
+(\Cref{eq:ann-vol}), the Sharpe ratio with $r_f = 2\%$
+(\Cref{eq:sharpe}), the percentage of positive days, and the best and worst
+single-day returns, on the \emph{aggregate} S\&P 500 return series,
+writing one CSV file per configuration to
+\texttt{outputs/clustering/validation/} (e.g.,
+\texttt{metrics\_kmeans\_tech\_sent.csv}, \texttt{metrics\_hmm\_tech.csv}),
+summarized in \Cref{tab:market-kmeans,tab:market-hmm}.
+
+\textbf{\texttt{clustering/sector\_regime\_analysis.py}} extends the
+economic validation to the sector level (\Cref{sec:results-econ-sector}).
+For each of the three K-Means models, it defines a \texttt{MODELS}
+configuration dictionary and a \texttt{REGIME\_MAP = \{0: "Bull", 1:
+"Bear", 2: "Crisis"\}} label mapping, reindexes the 1{,}132-observation
+cluster labels onto the daily calendar of each of the 11 GICS sector return
+series via forward-fill (yielding 3{,}695 sector-days per model,
+\Cref{sec:results-econ-sector}), computes the same set of economic metrics
+plus the maximum drawdown over (non-contiguous) regime days
+(\Cref{eq:max-dd}) for every (sector, regime) combination, and writes the
+results to \texttt{outputs/clustering/validation/<model>/sector\_regime\_metrics.csv}
+(reproduced in full in \Cref{annex:tables}). The function
+\texttt{generate\_heatmaps()} then produces, for each model, seven heatmap
+figures (Sharpe ratio, maximum drawdown, percentage of positive days, best
+day, worst day, annualized return and annualized volatility, by sector and
+regime), of which the Sharpe ratio, maximum drawdown, best-day and
+worst-day heatmaps for Model B and the Sharpe ratio heatmaps for Models A
+and C are reproduced in \Cref{sec:results-econ-sector,sec:results-modelC}.

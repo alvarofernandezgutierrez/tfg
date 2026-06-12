@@ -10,6 +10,9 @@ DATA_PATH = Path("data/processed/news/fnspid_sentiment_by_sector.parquet")
 OUT_DIR = Path("outputs/eda/sentiment_smoothing")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Consistente con el resto del pipeline
+DATE_CUTOFF = "2019-12-31"
+
 WINDOWS = [5, 10, 21]
 WINDOW_COLORS = {"5": "#2196F3", "10": "#FF9800", "21": "#4CAF50"}
 
@@ -21,11 +24,15 @@ def main():
     df = pd.read_parquet(DATA_PATH)
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df = df.sort_values("date").reset_index(drop=True)
+
+    # FIX: filtro temporal consistente con el pipeline de clustering
+    df = df[df["date"] <= DATE_CUTOFF].copy()
     print(f"Filas cargadas: {len(df):,}")
     print(f"Rango de fechas: {df['date'].min().date()} -> {df['date'].max().date()}")
 
     # ---- 2. Detectar columnas de sectores ----
-    sentiment_cols = [c for c in df.columns if c.startswith("sentiment_avg_")]
+    sentiment_cols = [c for c in df.columns if c.startswith("sentiment_avg_")
+                      and not c.endswith("_smooth")]
     sectors = [c.replace("sentiment_avg_", "") for c in sentiment_cols]
     print(f"\nSectores encontrados ({len(sectors)}):")
     for s in sectors:
@@ -63,7 +70,6 @@ def main():
             fontsize=13, fontweight="bold"
         )
 
-        # Panel superior: serie original + todas las MA
         axes[0].plot(df["date"], series, alpha=0.35, color="#888888",
                      linewidth=0.9, label="Original")
         for w in WINDOWS:
@@ -75,7 +81,6 @@ def main():
         axes[0].grid(True, alpha=0.25)
         axes[0].axhline(0, color="black", linewidth=0.7, linestyle="--")
 
-        # Panel inferior: diferencia entre original y MA21 (ruido residual)
         residual = series - smooth_series[21]
         axes[1].fill_between(df["date"], residual, 0,
                              where=(residual >= 0), color="#4CAF50", alpha=0.4, label="Ruido +")
@@ -92,7 +97,7 @@ def main():
         plt.xticks(rotation=0)
 
         plt.tight_layout()
-        out_path = OUT_DIR / f"{sector}.png"
+        out_path = OUT_DIR / f"{sector}_smooth.png"
         plt.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close()
 
@@ -110,8 +115,8 @@ def main():
     for w in WINDOWS:
         col = f"noise_red_MA{w}_pct"
         mean_red = df_noise[col].mean()
-        min_red = df_noise[col].min()
-        max_red = df_noise[col].max()
+        min_red  = df_noise[col].min()
+        max_red  = df_noise[col].max()
         print(f"  MA{w:2d}: media={mean_red:5.1f}%  min={min_red:5.1f}%  max={max_red:5.1f}%")
 
     print("\n" + "=" * 65)
@@ -126,7 +131,12 @@ def main():
     )
 
     # ---- 5. Gráfico resumen comparativo (todos los sectores, MA21) ----
-    fig, axes = plt.subplots(4, 3, figsize=(18, 16), sharex=True)
+    # FIX: calcular nrows dinámicamente para evitar IndexError
+    n = len(sectors)
+    ncols = 3
+    nrows = int(np.ceil(n / ncols))
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(18, nrows * 4), sharex=True)
     axes = axes.flatten()
 
     for i, (col, sector) in enumerate(zip(sentiment_cols, sectors)):
@@ -141,16 +151,19 @@ def main():
         ax.xaxis.set_major_locator(mdates.YearLocator(2))
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
-    # Ocultar ejes sobrantes
-    for j in range(len(sectors), len(axes)):
+    # FIX: ocultar subplots sobrantes correctamente
+    for j in range(n, len(axes)):
         axes[j].set_visible(False)
 
-    fig.suptitle("Sentimiento por sector — Serie original vs MA21", fontsize=14, fontweight="bold")
+    fig.suptitle(
+        f"Sentimiento por sector — Serie original vs MA21 (hasta {DATE_CUTOFF[:4]})",
+        fontsize=14, fontweight="bold"
+    )
     plt.tight_layout()
     plt.savefig(OUT_DIR / "_resumen_todos_sectores_MA21.png", dpi=150, bbox_inches="tight")
     plt.close()
 
-    print(f"\n✅ {len(sectors)} gráficos individuales + 1 resumen guardados en: {OUT_DIR}")
+    print(f"\n✅ {n} gráficos individuales + 1 resumen guardados en: {OUT_DIR}")
 
 
 if __name__ == "__main__":

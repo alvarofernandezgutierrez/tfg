@@ -8,6 +8,9 @@ TECHNICAL_PATH = Path("data/processed/market/technical_indicators.parquet")
 OUT_PATH = Path("data/processed/clustering_dataset_debug.parquet") if DEBUG_MODE else Path("data/processed/clustering_dataset.parquet")
 OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+
+DATE_CUTOFF = "2024-12-31"
+
 def main():
     print(f"{'[DEBUG MODE]' if DEBUG_MODE else '[FULL MODE]'}")
 
@@ -41,10 +44,14 @@ def main():
     print("\nCruzando por fecha...")
     df = sent.merge(tech, on="date", how="inner")
     print(f"Filas tras cruce: {len(df):,}")
+
+    # ---- 4. Filtro temporal hasta 2019 ----
+    df = df[df["date"] <= DATE_CUTOFF].copy()
+    print(f"Filas tras filtro hasta {DATE_CUTOFF}: {len(df):,}")
     print(f"Rango fechas: {df['date'].min()} -> {df['date'].max()}")
     print(f"Total columnas: {len(df.columns)}")
 
-    # ---- 4. Verificar NaN ----
+    # ---- 5. Verificar NaN ----
     nans = df.isnull().sum()
     if nans.sum() > 0:
         print(f"\nColumnas con NaN:")
@@ -52,9 +59,11 @@ def main():
     else:
         print("\nSin NaN — dataset limpio")
 
-    # ---- 5. Guardar ----
+    # ---- 6. Guardar ----
     df.to_parquet(OUT_PATH, index=False)
     print(f"\n✅ Guardado en: {OUT_PATH}")
+    print(f"   Período: {df['date'].min().date()} → {df['date'].max().date()}")
+    print(f"   Días de trading: {len(df):,}")
 
 if __name__ == "__main__":
     main()

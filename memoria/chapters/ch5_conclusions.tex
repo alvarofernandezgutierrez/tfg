@@ -1,0 +1,298 @@
+\chapter{Conclusions and Future Work}
+\label{ch:conclusions}
+
+This final chapter synthesizes the work presented in this thesis.
+\Cref{sec:concl-summary} summarizes the pipeline that was designed and
+implemented. \Cref{sec:concl-findings} revisits the central research
+question posed in \Cref{ch:introduction} in light of the results of
+\Cref{ch:results}. \Cref{sec:concl-limitations} discusses the limitations
+of the methodology, and \Cref{sec:concl-future} outlines directions for
+future work.
+
+\section{Summary of the Thesis}
+\label{sec:concl-summary}
+
+This thesis set out to answer the following question: \emph{can
+sector-level sentiment extracted from financial news using FinBERT improve
+the identification of market regimes obtained through unsupervised
+clustering of technical indicators, and if so, in what sense?}
+(\Cref{sec:motivation}). To answer it, a complete, reproducible
+end-to-end pipeline was designed and implemented, comprising:
+
+\begin{itemize}
+  \item \textbf{Data acquisition and filtering} (\Cref{sec:meth-fnspid,sec:meth-sp500,sec:meth-filtering}):
+  financial news headlines from the FNSPID corpus were filtered to retain
+  only those associated with companies that were S\&P 500 constituents at
+  the time of publication, and reassigned to the next open trading day to
+  prevent look-ahead bias.
+
+  \item \textbf{Sentiment scoring with FinBERT} (\Cref{sec:meth-finbert}):
+  each filtered headline was scored with the \texttt{ProsusAI/finbert}
+  model, producing a continuous score $s = p_{\text{pos}} - p_{\text{neg}}
+  \in [-1,1]$ and a categorical label.
+
+  \item \textbf{Sector-level aggregation and smoothing}
+  (\Cref{sec:meth-aggregation,sec:meth-smoothing}): scores were aggregated
+  by (date, GICS sector) into mean and standard deviation statistics, and
+  a 21-session moving average was applied, reducing day-to-day noise by
+  47.4--72.6\% depending on the sector while preserving medium-term trends
+  (\Cref{tab:ma-noise-reduction}).
+
+  \item \textbf{Technical indicator computation}
+  (\Cref{sec:meth-technical}): nine indicators (RSI, two moving-average
+  ratios, two momentum measures, two realized-volatility measures and two
+  skewness measures) were computed from daily S\&P 500 OHLC prices.
+
+  \item \textbf{Dataset construction} (\Cref{sec:meth-dataset}): technical
+  and sentiment features were merged into a single daily dataset of 1,132
+  observations (May 2009 -- February 2024, 46 columns).
+
+  \item \textbf{Clustering} (\Cref{sec:meth-kmeans,sec:meth-hmm}): three
+  \textit{K-Means} configurations (Model A -- technical only; Model B --
+  technical + raw sentiment; Model C -- smoothed sentiment only), each
+  with $K=3$, plus a Gaussian HMM ($K=3$, full covariance) fitted on the
+  Model A and Model B feature sets, were trained and the resulting
+  clusters/states labeled as \emph{Bull}, \emph{Bear} or \emph{Crisis}
+  via centroid analysis (\Cref{sec:meth-labeling}).
+
+  \item \textbf{Internal and economic validation}
+  (\Cref{sec:meth-validation,ch:results}): the resulting partitions were
+  evaluated through silhouette analysis in a common PCA space,
+  ANOVA-based feature importance, and a sector-level economic validation
+  framework computing annualized return, volatility, Sharpe ratio,
+  maximum drawdown, percentage of positive days, and extreme daily returns
+  for every (GICS sector, regime) combination.
+\end{itemize}
+
+\section{Main Findings and Answer to the Research Question}
+\label{sec:concl-findings}
+
+The results of \Cref{ch:results} support a nuanced, two-part answer to the
+thesis's central question.
+
+\textbf{On purely statistical (internal) grounds, sentiment does not
+improve cluster cohesion.} The silhouette coefficient computed in a common
+9-component PCA space (82.0\% explained variance) ranks Model A
+(technical only, $0.1928$) above Model B (technical + raw sentiment,
+$0.1778$), which in turn ranks above Model C (smoothed sentiment only,
+$0.1623$) (\Cref{tab:silhouette-comparison}). Moreover, the ANOVA
+feature-importance analysis (\Cref{tab:feature-importance}) confirms that
+the six most discriminative features for Model B's partition are all
+technical indicators, with \texttt{MA50\_ratio\_sp500} ($F=597.81$) and
+\texttt{RSI\_sp500} ($F=561.49$) leading by a wide margin. Technical
+indicators therefore remain the primary axis along which the data
+naturally separates into clusters.
+
+\textbf{However, on economic grounds, incorporating sentiment sharpens the
+differentiation between regimes.} Model B's \emph{Bear} regime exhibits a
+negative Sharpe ratio in 10 of the 11 GICS sectors
+(\Cref{fig:heatmap-sharpe-modelB}), compared to a qualitatively similar but
+slightly less extreme pattern for Model A
+(\Cref{fig:heatmap-sharpe-modelA}). At the market level, Model B's
+\emph{Bull} and \emph{Crisis} Sharpe ratios ($3.82$ and $3.75$) are both
+higher than Model A's ($3.68$ and $3.28$), while its \emph{Bear} Sharpe
+($-3.06$) is marginally less negative than Model A's ($-3.12$)
+(\Cref{tab:market-kmeans}). The net effect of adding raw sector sentiment
+to the feature set is thus a partition that is statistically slightly less
+cohesive, but economically slightly \emph{more} differentiated --- a
+trade-off that, in the context of regime detection for risk management or
+asset allocation, may reasonably be considered favorable, since the
+economic interpretability of a regime (how different is its Sharpe ratio
+from the others?) is arguably more decision-relevant than its purely
+geometric cohesion in feature space.
+
+A second major finding concerns \textbf{what each regime represents
+economically}. Across Models A and B, the \emph{Bear} regime is the only
+one with a negative aggregate Sharpe ratio, and is associated with deep
+drawdowns (mean across sectors of $-47.2\%$ for Model B). The
+\emph{Crisis} regime, despite having the highest point-in-time volatility,
+has the \emph{highest} Sharpe ratio of the three regimes for every single
+GICS sector, reflecting its association with the sharp V-shaped recoveries
+that followed the 2008--2009 financial crisis and the 2020 COVID-19 crash
+(\Cref{sec:results-regimes}). The single most extreme sector/regime
+combination in the entire dataset is \emph{Energy} during the \emph{Bear}
+regime, which records the worst maximum drawdown ($-74.9\%$) and both the
+best ($+16.9\%$) and worst ($-24.7\%$) single-day returns of the whole
+sample (\Cref{fig:heatmap-maxdd-modelB,fig:heatmap-bestday-modelB,fig:heatmap-worstday-modelB}).
+
+A third finding is the \textbf{negative result associated with Model C}
+(\Cref{sec:results-modelC}): clustering on smoothed sector sentiment alone
+produces clusters whose technical centroids are nearly indistinguishable
+(e.g., \texttt{MA50\_ratio\_sp500} ranges only from $1.0086$ to $1.0134$
+across Model C's three clusters, versus a range of $0.0653$ for Model A),
+and whose inherited Bull/Bear/Crisis labels do not preserve a monotonic
+Sharpe-ratio ordering (Model C's ``Bear'' regime has a \emph{higher}
+market-level Sharpe ratio than its ``Bull'' regime). This indicates that,
+at the sector-aggregation and 21-session smoothing granularity considered
+in this thesis, sentiment functions as a \emph{complement} to price
+information rather than a \emph{substitute} for it.
+
+Finally, the \textbf{comparison between \textit{K-Means} and the Gaussian
+HMM} (\Cref{sec:results-hmm}) shows that both methods identify
+qualitatively similar regimes --- both isolate a small, high-volatility
+cluster/state associated with 2009 and 2020 --- but the HMM's
+state-level Sharpe ratios ($-0.63$ to $+1.54$ for \texttt{hmm\_tech},
+$-0.25$ to $+1.25$ for \texttt{hmm\_tech\_sent}) span a range roughly
+4--5 times narrower than \textit{K-Means}'s ($-3.12$ to $+3.82$). This is
+attributed to the temporal-persistence constraint imposed by the HMM's
+transition matrix, which causes extreme days to be ``averaged'' together
+with the surrounding, less extreme days of the same episode --- a
+trade-off between temporal coherence and sharp economic differentiation
+that should inform the choice of method depending on the intended
+application (real-time monitoring versus retrospective characterization of
+regimes).
+
+In summary, this thesis concludes that \textbf{sector-level sentiment
+extracted via FinBERT does not, by itself, define market regimes as
+sharply as technical indicators, but when combined with technical
+indicators, it produces regimes with a sharper and more
+sector-consistent economic profile} --- in particular, a more uniformly
+adverse \emph{Bear} regime across the equity market. This constitutes a
+modest but genuine affirmative answer to the thesis's central question,
+while also identifying a clear boundary condition (Model C) beyond which
+sentiment alone is insufficient.
+
+\section{Limitations}
+\label{sec:concl-limitations}
+
+Several limitations of the methodology adopted in this thesis should be
+acknowledged.
+
+\begin{enumerate}
+  \item \textbf{Survivorship and constituent-list bias.} The S\&P 500
+  constituent list used to filter FNSPID news reflects, for practical
+  reasons, a snapshot-based approach to historical membership
+  (\Cref{sec:meth-sp500}). Companies that were removed from the index
+  (e.g., due to bankruptcy or acquisition) may be under-represented in the
+  news-filtering step for the periods immediately preceding their removal,
+  which could introduce a mild positive bias in the sentiment signal
+  associated with distressed companies.
+
+  \item \textbf{Sector-level aggregation discards firm-level information.}
+  By aggregating sentiment at the GICS sector level, the pipeline
+  necessarily discards information about \emph{which} companies within a
+  sector are driving the sentiment signal on a given day. A small number
+  of highly-covered companies (e.g., large-cap technology firms within
+  \textit{Information Technology}) may disproportionately influence the
+  sector-level average, effectively making the sector signal a
+  weighted-by-news-volume proxy for its most newsworthy constituents
+  rather than a balanced sector-wide measure.
+
+  \item \textbf{Dataset size and the curse of dimensionality for Model B.}
+  Model B's 31-dimensional feature space (9 technical + 22 raw sentiment
+  features) is clustered using only 1,132 observations --- a
+  feature-to-observation ratio that, while not unusual for exploratory
+  cluster analysis, may make the resulting partition more sensitive to
+  noise in the raw (unsmoothed) sentiment columns than a model with fewer
+  features. This is reflected in Model B's comparatively low silhouette
+  coefficient in its own feature space (0.1213, \Cref{tab:silhouette-comparison}).
+
+  \item \textbf{Methodological discrepancy in the MA21 justification
+  analysis.} As discussed in \Cref{sec:meth-smoothing}, the noise-reduction
+  analysis that motivated the choice of a 21-session moving average
+  (\Cref{tab:ma-noise-reduction}) was performed on an earlier snapshot of
+  the sentiment dataset (1,073 observations, 2009--2019) rather than on the
+  final 1,132-observation dataset (2009--2024) used for clustering. While
+  there is no reason to expect the qualitative conclusion (MA21 provides
+  substantial noise reduction while preserving medium-term trends) to
+  change with the additional 2019--2024 data, the exact noise-reduction
+  percentages reported were not recomputed on the final dataset.
+
+  \item \textbf{Fixed number of clusters/states ($K=3$).} All clustering
+  models in this thesis use $K=3$, motivated by the conventional
+  Bull/Bear/Crisis trichotomy. While this choice is supported by the elbow
+  method for Models A and B (\Cref{fig:elbow-modelA,fig:elbow-modelB}), it
+  was not exhaustively re-validated for Model C or for the HMM, and a
+  different value of $K$ might reveal additional, economically meaningful
+  sub-regimes (e.g., a separate ``recovery'' regime distinct from
+  ``crisis'').
+
+  \item \textbf{Single asset universe and time period.} The analysis is
+  restricted to S\&P 500 constituents over a single 15-year period
+  (2009--2024), which is dominated by a long secular bull market punctuated
+  by two major crisis episodes (2009, 2020). The generalizability of the
+  findings --- particularly the relative ranking of Models A, B and C ---
+  to other equity markets, other asset classes (e.g., fixed income,
+  commodities), or different macroeconomic regimes (e.g., a sustained
+  high-inflation environment) has not been tested.
+
+  \item \textbf{Static, unsupervised evaluation.} The economic validation
+  framework (\Cref{sec:meth-validation}) computes \emph{retrospective}
+  performance metrics for days already assigned to a given regime; it does
+  not evaluate whether the detected regimes could have been identified
+  \emph{in real time}, nor does it assess the practical profitability of a
+  trading or risk-management strategy that would have reacted to regime
+  transitions as they occurred.
+\end{enumerate}
+
+\section{Future Work}
+\label{sec:concl-future}
+
+Building on the findings and limitations discussed above, several
+directions for future work can be identified.
+
+\begin{itemize}
+  \item \textbf{Firm-level sentiment features.} Rather than aggregating
+  sentiment only at the GICS sector level, future work could retain
+  firm-level sentiment scores (or a small number of summary statistics per
+  firm) and incorporate cross-sectional dispersion measures --- e.g., the
+  fraction of constituent firms within a sector with strongly negative
+  sentiment on a given day --- which may carry information that is averaged
+  away by sector-level aggregation.
+
+  \item \textbf{Dynamic / adaptive number of clusters.} The fixed choice of
+  $K=3$ could be relaxed by exploring model-selection criteria (e.g.,
+  Bayesian Information Criterion for the HMM, or gap-statistic-based
+  selection for \textit{K-Means}) applied independently to each of Models
+  A, B and C, to test whether the technical+sentiment feature space
+  naturally supports a different number of regimes than the technical-only
+  space.
+
+  \item \textbf{Sequential and deep-learning architectures.} The
+  comparison between \textit{K-Means} (sharp, non-temporal) and the
+  Gaussian HMM (smooth, temporal but Gaussian-emission) could be extended
+  to more flexible sequential models, such as recurrent neural networks,
+  Transformer-based sequence models, or non-Gaussian HMM variants (e.g.,
+  with Student-$t$ or mixture emissions), which might combine the temporal
+  coherence of the HMM with the sharper economic differentiation of
+  \textit{K-Means}.
+
+  \item \textbf{Real-time / online regime detection.} The current pipeline
+  operates in a fully \emph{retrospective} (batch) setting. An important
+  extension would be to implement an online or rolling-window version of
+  the pipeline, in which sentiment scores, technical indicators and
+  cluster/state assignments are updated incrementally as new data arrives,
+  and to evaluate the \emph{lead time} between a regime transition being
+  detected and the corresponding shift in aggregate market returns.
+
+  \item \textbf{Trading and risk-management applications.} A natural
+  extension of the economic validation framework would be to design and
+  backtest simple rule-based strategies that adjust sector exposure based
+  on the detected regime (e.g., reducing exposure to sectors in their
+  \emph{Bear} regime), accounting for transaction costs and
+  implementation lags, to assess whether the economic differentiation
+  documented in \Cref{ch:results} translates into a practically
+  exploitable signal.
+
+  \item \textbf{Extension to other markets and asset classes.} Repeating
+  the pipeline for other equity indices (e.g., European or Asian
+  benchmarks), for individual large-cap stocks, or for other asset classes
+  such as government bonds or commodities, would help establish whether
+  the incremental value of sentiment documented for the S\&P 500 in this
+  thesis generalizes, or whether it is specific to the news coverage
+  patterns and market dynamics of US large-cap equities.
+
+  \item \textbf{Updated MA21 justification on the final dataset.} As noted
+  in \Cref{sec:concl-limitations}, the moving-average noise-reduction
+  analysis of \Cref{tab:ma-noise-reduction} could be recomputed on the
+  final 1,132-observation (2009--2024) dataset, both to confirm the
+  reported noise-reduction percentages and to verify that the choice of a
+  21-session window remains optimal once the additional 2019--2024 data is
+  included.
+\end{itemize}
+
+Taken together, these directions point towards a broader research program
+in which sentiment-augmented, unsupervised regime detection is developed
+from the exploratory, retrospective analysis presented in this thesis into
+a more granular, adaptive, and ultimately actionable tool for
+understanding and responding to changes in market conditions.
