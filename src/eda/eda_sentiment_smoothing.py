@@ -11,7 +11,7 @@ OUT_DIR = Path("outputs/eda/sentiment_smoothing")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Consistente con el resto del pipeline
-DATE_CUTOFF = "2019-12-31"
+DATE_CUTOFF = "2024-12-31"
 
 WINDOWS = [5, 10, 21]
 WINDOW_COLORS = {"5": "#2196F3", "10": "#FF9800", "21": "#4CAF50"}
